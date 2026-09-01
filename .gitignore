@@ -9,3 +9,5 @@ coverage/
 Thumbs.db
 *.tsbuildinfo
 *.xlsx
+supabase/.temp/
+supabase/.branches/
