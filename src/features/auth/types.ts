@@ -14,3 +14,5 @@ export interface AuthActionState {
     password?: string;
   };
 }
+
+export const initialAuthActionState: AuthActionState = {};

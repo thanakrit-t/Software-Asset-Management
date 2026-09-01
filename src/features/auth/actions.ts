@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { AuthActionState } from "./types";
 
-export const initialAuthActionState: AuthActionState = {};
 const invalidLoginMessage = "อีเมลหรือรหัสผ่านไม่ถูกต้อง กรุณาลองอีกครั้ง";
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

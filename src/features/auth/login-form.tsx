@@ -2,8 +2,8 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { initialAuthActionState, login } from "./actions";
-import type { AuthActionState } from "./types";
+import { login } from "./actions";
+import { initialAuthActionState, type AuthActionState } from "./types";
 
 function SubmitButton() {
   const { pending } = useFormStatus();

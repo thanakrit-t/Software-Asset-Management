@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { initialAuthActionState, login, logout } from "./actions";
+import * as serverActions from "./actions";
+import { initialAuthActionState } from "./types";
+
+const { login, logout } = serverActions;
 
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((path: string) => {
@@ -18,6 +21,10 @@ function credentials(email: string, password: string) {
   formData.set("password", password);
   return formData;
 }
+
+test("exports only functions from the server action module", () => {
+  expect(Object.values(serverActions).every((value) => typeof value === "function")).toBe(true);
+});
 
 test("rejects invalid credentials before contacting Supabase", async () => {
   const result = await login(initialAuthActionState, credentials("invalid", ""));
