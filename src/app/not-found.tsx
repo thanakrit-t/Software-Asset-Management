@@ -1,0 +1,3 @@
+import Link from "next/link";
+import { FileQuestion } from "lucide-react";
+export default function NotFound() { return <section className="grid min-h-[60vh] place-items-center text-center"><div><span className="mx-auto grid size-16 place-items-center rounded-2xl bg-blue-50 text-blue-700"><FileQuestion aria-hidden="true" size={28} /></span><p className="mt-5 text-sm font-bold text-blue-600">404</p><h1 className="mt-1 text-2xl font-bold text-slate-950">ไม่พบข้อมูลที่ต้องการ</h1><p className="mt-2 text-sm text-slate-500">รายการอาจถูก Archive หรือ URL ไม่ถูกต้อง</p><Link href="/" className="mt-5 inline-flex min-h-11 items-center rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700">กลับไปหน้า Dashboard</Link></div></section>; }
