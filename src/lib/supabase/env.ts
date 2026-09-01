@@ -4,7 +4,7 @@ export interface PublicSupabaseEnv {
 }
 
 export function readPublicSupabaseEnv(
-  source: NodeJS.ProcessEnv,
+  source: Readonly<Record<string, string | undefined>>,
 ): PublicSupabaseEnv {
   const url = source.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const publishableKey = source.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
@@ -13,7 +13,7 @@ export function readPublicSupabaseEnv(
     !publishableKey && "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
   ].filter((name): name is string => Boolean(name));
 
-  if (missing.length > 0) {
+  if (!url || !publishableKey) {
     throw new Error(`Missing Supabase environment variable: ${missing.join(", ")}`);
   }
 

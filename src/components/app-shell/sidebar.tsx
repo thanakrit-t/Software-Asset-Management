@@ -101,10 +101,10 @@ export function Sidebar({ role, pathname, className, onNavigate, onClose }: Side
 
       <div className="m-4 rounded-2xl bg-gradient-to-br from-blue-950 to-blue-700 p-4 text-white shadow-lg shadow-blue-950/15">
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-blue-100">
-          <ShieldCheck aria-hidden="true" size={16} /> UI Prototype
+          <ShieldCheck aria-hidden="true" size={16} /> Authenticated session
         </div>
-        <p className="text-sm font-semibold">Mock data mode</p>
-        <p className="mt-1 text-xs leading-5 text-blue-100">ยังไม่มีการเชื่อมต่อ Supabase หรือข้อมูลจริง</p>
+        <p className="text-sm font-semibold">Verified access</p>
+        <p className="mt-1 text-xs leading-5 text-blue-100">สิทธิ์การใช้งานอ้างอิงจากบัญชีผู้ใช้ที่เข้าสู่ระบบ</p>
       </div>
     </aside>
   );

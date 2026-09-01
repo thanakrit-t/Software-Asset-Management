@@ -1,22 +1,36 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { RoleProvider, useRole } from "./role-provider";
+import { RoleProvider, useViewer } from "./role-provider";
 import { Topbar } from "./topbar";
 
-function RoleProbe() {
-  const { role } = useRole();
-  return <output aria-label="current role">{role}</output>;
+const viewer = {
+  id: "admin-1",
+  displayName: "Admin User",
+  email: "admin@example.com",
+  role: "admin" as const,
+};
+
+function ViewerProbe() {
+  const currentViewer = useViewer();
+  return (
+    <output aria-label="current viewer">
+      {currentViewer.email}:{currentViewer.role}
+    </output>
+  );
 }
 
-test("switches the UI preview role and persists it for the session", async () => {
-  const user = userEvent.setup();
+test("shows the verified viewer without a client-side role preview", () => {
   render(
-    <RoleProvider>
+    <RoleProvider viewer={viewer}>
       <Topbar onOpenMenu={() => undefined} />
-      <RoleProbe />
+      <ViewerProbe />
     </RoleProvider>,
   );
-  await user.selectOptions(screen.getByRole("combobox", { name: /เลือก Role/ }), "user");
-  expect(screen.getByLabelText("current role")).toHaveTextContent("user");
-  expect(window.sessionStorage.getItem("sam-preview-role")).toBe("user");
+
+  expect(screen.getByText("Admin User")).toBeInTheDocument();
+  expect(screen.getByLabelText("current viewer")).toHaveTextContent(
+    "admin@example.com:admin",
+  );
+  expect(screen.queryByRole("combobox", { name: /เลือก Role/ })).not.toBeInTheDocument();
+  expect(window.sessionStorage.getItem("sam-preview-role")).toBeNull();
+  expect(screen.getByRole("button", { name: "ออกจากระบบ" })).toBeInTheDocument();
 });

@@ -4,9 +4,16 @@ import { AppShell } from "./app-shell";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 
+const viewer = {
+  id: "admin-1",
+  displayName: "Admin User",
+  email: "admin@example.com",
+  role: "admin" as const,
+};
+
 test("exposes navigation and main content landmarks", () => {
   render(
-    <RoleProvider>
+    <RoleProvider viewer={viewer}>
       <AppShell><h1>Dashboard</h1></AppShell>
     </RoleProvider>,
   );
