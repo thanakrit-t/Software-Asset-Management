@@ -74,14 +74,11 @@ function NavigationLinks({ items, role, pathname, onNavigate }: Pick<SidebarProp
 export function Sidebar({ role, pathname, className, onNavigate, onClose }: SidebarProps) {
   return (
     <aside className={cn("flex h-full w-[280px] flex-col border-r border-slate-200 bg-white", className)}>
-      <div className="flex h-20 items-center gap-3 border-b border-slate-100 px-5">
-        <LogoMark />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-slate-950">Software Asset</p>
-          <p className="truncate text-xs font-medium text-slate-500">Management System</p>
-        </div>
+      <div className={cn("relative flex h-24 flex-col justify-center gap-1.5 border-b border-slate-100 px-5", onClose && "pr-16")}>
+        <LogoMark className="w-[150px]" />
+        <p className="truncate text-xs font-semibold text-slate-600">Software Asset Management</p>
         {onClose ? (
-          <button type="button" aria-label="ปิดเมนู" onClick={onClose} className="ml-auto grid size-11 place-items-center rounded-xl text-slate-500 hover:bg-slate-100">
+          <button type="button" aria-label="ปิดเมนู" onClick={onClose} className="absolute right-3 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-xl text-slate-500 hover:bg-slate-100">
             <X aria-hidden="true" size={20} />
           </button>
         ) : null}

@@ -3,6 +3,7 @@ import { Sidebar } from "./sidebar";
 
 test("shows settings navigation to administrators", () => {
   render(<Sidebar role="admin" pathname="/" />);
+  expect(screen.getByRole("img", { name: "Thai Kurabo" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /ตั้งค่าระบบ/ })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /ข้อมูลตั้งต้น/ })).toBeInTheDocument();
 });

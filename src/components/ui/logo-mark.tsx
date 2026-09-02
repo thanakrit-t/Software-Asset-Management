@@ -1,9 +1,14 @@
-import { Boxes } from "lucide-react";
+import Image from "next/image";
+import { cn } from "@/lib/cn";
 
-export function LogoMark() {
+export function LogoMark({ className }: { className?: string }) {
   return (
-    <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-800 text-white shadow-lg shadow-blue-950/20">
-      <Boxes aria-hidden="true" size={22} strokeWidth={2.2} />
-    </span>
+    <Image
+      src="/images/c_logo.png"
+      alt="Thai Kurabo"
+      width={255}
+      height={40}
+      className={cn("h-auto w-[156px] shrink-0 object-contain", className)}
+    />
   );
 }
