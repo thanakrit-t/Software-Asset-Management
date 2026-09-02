@@ -1,6 +1,6 @@
 begin;
 
-select plan(25);
+select plan(26);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -280,6 +280,21 @@ select is(
   ),
   false,
   'authenticated role cannot execute the private fingerprint helper'
+);
+
+select is(
+  coalesce(
+    has_function_privilege(
+      'authenticated',
+      to_regprocedure(
+        'private.assert_no_license_secret_collision(text[],bytea[])'
+      ),
+      'execute'
+    ),
+    true
+  ),
+  false,
+  'authenticated role cannot execute the private collision guard'
 );
 
 select is(

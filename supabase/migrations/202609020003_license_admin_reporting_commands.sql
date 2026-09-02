@@ -82,7 +82,7 @@ begin
   end if;
 
   ascii_upper := pg_catalog.translate(
-    pg_catalog.btrim(secret_value),
+    secret_value,
     'abcdefghijklmnopqrstuvwxyz',
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
   );
@@ -96,11 +96,13 @@ begin
     );
   end if;
 
-  return pg_catalog.regexp_replace(
-    ascii_upper,
-    '[[:space:]]+',
-    ' ',
-    'g'
+  return pg_catalog.btrim(
+    pg_catalog.regexp_replace(
+      ascii_upper,
+      '[[:space:]]+',
+      ' ',
+      'g'
+    )
   );
 end;
 $$;
@@ -321,6 +323,19 @@ begin
     raise exception using errcode = 'P0001', message = 'OWNED_BELOW_ALLOCATED';
   end if;
 
+  perform private.assert_no_license_secret_collision(
+    array[
+      payload->>'license_reference',
+      payload->>'invoice_reference',
+      payload->>'po_reference',
+      payload->>'contract_reference',
+      payload->>'owner_name',
+      payload->>'remark',
+      payload->>'reason'
+    ]::text[],
+    array[]::bytea[]
+  );
+
   update public.license_entitlements
   set license_reference = case
         when payload ? 'license_reference'
@@ -455,6 +470,11 @@ begin
     raise exception using errcode = 'P0001', message = 'ACTIVE_ALLOCATIONS_EXIST';
   end if;
 
+  perform private.assert_no_license_secret_collision(
+    array[reason]::text[],
+    array[]::bytea[]
+  );
+
   update public.license_entitlements
   set record_status = 'archived',
       archived_at = pg_catalog.now(),
@@ -538,6 +558,57 @@ begin
     private.license_fingerprint_pepper(),
     'sha256'
   );
+end;
+$$;
+
+create or replace function private.assert_no_license_secret_collision(
+  candidates text[],
+  additional_fingerprints bytea[]
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  candidate_value text;
+  license_key_candidate_fingerprint bytea;
+  serial_candidate_fingerprint bytea;
+begin
+  foreach candidate_value in array coalesce(candidates, array[]::text[])
+  loop
+    if pg_catalog.regexp_replace(
+      coalesce(candidate_value, ''),
+      '[[:space:]]',
+      '',
+      'g'
+    ) = '' then
+      continue;
+    end if;
+
+    license_key_candidate_fingerprint :=
+      private.fingerprint_license_secret('license_key', candidate_value);
+    serial_candidate_fingerprint :=
+      private.fingerprint_license_secret('serial_number', candidate_value);
+
+    if exists (
+      select 1
+      from private.license_secrets as stored_secret
+      where stored_secret.license_key_fingerprint =
+          license_key_candidate_fingerprint
+        or stored_secret.serial_fingerprint = serial_candidate_fingerprint
+    )
+    or license_key_candidate_fingerprint = any (
+      coalesce(additional_fingerprints, array[]::bytea[])
+    )
+    or serial_candidate_fingerprint = any (
+      coalesce(additional_fingerprints, array[]::bytea[])
+    ) then
+      raise exception using
+        errcode = 'P0001',
+        message = 'LICENSE_SECRET_COLLISION';
+    end if;
+  end loop;
 end;
 $$;
 
@@ -760,6 +831,18 @@ begin
     );
   end if;
 
+  perform private.assert_no_license_secret_collision(
+    array[
+      payload->>'license_reference',
+      payload->>'invoice_reference',
+      payload->>'po_reference',
+      payload->>'contract_reference',
+      payload->>'owner_name',
+      payload->>'remark'
+    ]::text[],
+    array[license_key_fingerprint, serial_fingerprint]::bytea[]
+  );
+
   insert into public.license_entitlements (
     id, license_reference, software_product_id, vendor_id,
     license_metric_id, product_classification_id, purchase_form_id,
@@ -922,6 +1005,10 @@ begin
   end if;
 
   new_fingerprint := private.fingerprint_license_secret(secret_type, value);
+  perform private.assert_no_license_secret_collision(
+    array[reason]::text[],
+    array[new_fingerprint]::bytea[]
+  );
   new_mask := private.mask_license_secret(value);
 
   perform vault.update_secret(
@@ -1849,6 +1936,8 @@ from public, anon, authenticated;
 revoke all on function private.license_fingerprint_pepper()
 from public, anon, authenticated;
 revoke all on function private.fingerprint_license_secret(text, text)
+from public, anon, authenticated;
+revoke all on function private.assert_no_license_secret_collision(text[], bytea[])
 from public, anon, authenticated;
 revoke all on function private.mask_license_secret(text)
 from public, anon, authenticated;

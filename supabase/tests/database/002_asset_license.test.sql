@@ -1,6 +1,6 @@
 begin;
 
-select plan(115);
+select plan(127);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
@@ -895,6 +895,43 @@ select set_config(
   true
 );
 
+savepoint create_secret_collision_raw;
+select throws_ok(
+  $$
+    select public.create_license_entitlement(
+      jsonb_build_object(
+        'license_reference', 'CREATE-RAW-SECRET-001',
+        'software_product_id', current_setting('test.product_id'),
+        'owned_quantity', 1,
+        'license_metric', 'device'
+      ),
+      jsonb_build_object('license_key', 'CREATE-RAW-SECRET-001')
+    )
+  $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license create rejects raw secret plaintext in an ordinary field'
+);
+rollback to savepoint create_secret_collision_raw;
+
+savepoint create_secret_collision_normalized;
+select throws_ok(
+  $$
+    select public.create_license_entitlement(
+      jsonb_build_object(
+        'license_reference', 'CREATE-COLLISION-NORMALIZED',
+        'software_product_id', current_setting('test.product_id'),
+        'owned_quantity', 1,
+        'license_metric', 'device',
+        'remark', ' create secret 002 '
+      ),
+      jsonb_build_object('license_key', 'CREATE-SECRET-002')
+    )
+  $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license create rejects normalized secret plaintext in an audited field'
+);
+rollback to savepoint create_secret_collision_normalized;
+
 select lives_ok(
   $$
     select set_config(
@@ -996,6 +1033,14 @@ select set_config(
 from private.license_secrets
 where license_entitlement_id = current_setting('test.created_license_id')::uuid;
 
+select set_config(
+  'test.serial_fingerprint',
+  encode(serial_fingerprint, 'hex'),
+  true
+)
+from private.license_secrets
+where license_entitlement_id = current_setting('test.created_license_id')::uuid;
+
 set local role authenticated;
 select set_config(
   'request.jwt.claims',
@@ -1021,6 +1066,45 @@ select is(
   true,
   'ordinary license view exposes no plaintext, Vault UUID, or fingerprint'
 );
+
+savepoint update_secret_collision_raw;
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.created_license_id')::uuid,
+    1,
+    jsonb_build_object('invoice_reference', 'TEST-KEY-001')
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license update rejects raw stored secret plaintext in an ordinary field'
+);
+rollback to savepoint update_secret_collision_raw;
+
+savepoint update_secret_collision_normalized;
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.created_license_id')::uuid,
+    1,
+    jsonb_build_object('owner_name', E'\tserial\t 001\n')
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license update rejects normalized stored secret plaintext in an ordinary field'
+);
+rollback to savepoint update_secret_collision_normalized;
+
+savepoint update_reason_secret_collision;
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.created_license_id')::uuid,
+    1,
+    jsonb_build_object(
+      'record_status', 'deactivated',
+      'reason', 'test key 001'
+    )
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license state transition rejects a reason matching stored secret plaintext'
+);
+rollback to savepoint update_reason_secret_collision;
 
 select lives_ok(
   $$ select public.update_license_entitlement(
@@ -1068,6 +1152,32 @@ select is(
   true,
   'license inventory export exposes no plaintext, Vault UUID, or fingerprint'
 );
+
+savepoint rotate_reason_secret_collision_raw;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'ROTATE-SECRET-002',
+    'ROTATE-SECRET-002'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects a reason exactly matching the new secret'
+);
+rollback to savepoint rotate_reason_secret_collision_raw;
+
+savepoint rotate_reason_secret_collision_normalized;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'ROTATE-SECRET-002',
+    ' rotate secret 002 '
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects a reason normalized to the new secret'
+);
+rollback to savepoint rotate_reason_secret_collision_normalized;
 
 select lives_ok(
   $$ select public.rotate_license_secret(
@@ -1146,6 +1256,35 @@ select results_eq(
   'secret rotation audit contains the reason but not plaintext'
 );
 
+select lives_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'serial_number',
+    E'\tSERIAL\t 001\n',
+    'Whitespace-equivalent serial rotation'
+  ) $$,
+  'serial rotation accepts leading, trailing, and repeated whitespace'
+);
+
+reset role;
+
+select is(
+  (
+    select encode(serial_fingerprint, 'hex')
+    from private.license_secrets
+    where license_entitlement_id = current_setting('test.created_license_id')::uuid
+  ),
+  current_setting('test.serial_fingerprint'),
+  'serial HMAC normalization trims collapsed leading and trailing whitespace'
+);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
 select throws_ok(
   $$ select public.reveal_license_secret(
     current_setting('test.created_license_id')::uuid,
@@ -1216,6 +1355,26 @@ select is(
   0,
   'all license audit events remain free of secret plaintext'
 );
+
+savepoint archive_reason_secret_collision_raw;
+select throws_ok(
+  $$ select public.archive_license_entitlement(
+    '23000000-0000-4000-8000-000000000003', 1, 'TEST-KEY-001'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license archive rejects a reason matching raw stored secret plaintext'
+);
+rollback to savepoint archive_reason_secret_collision_raw;
+
+savepoint archive_reason_secret_collision_normalized;
+select throws_ok(
+  $$ select public.archive_license_entitlement(
+    '23000000-0000-4000-8000-000000000003', 1, E'\tserial\t 001\n'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'license archive rejects a reason normalized to stored secret plaintext'
+);
+rollback to savepoint archive_reason_secret_collision_normalized;
 
 select throws_ok(
   $$ select public.archive_license_entitlement(
@@ -1415,6 +1574,16 @@ select set_config(
   true
 );
 
+select set_config(
+  'test.vault_license_secret_count',
+  (
+    select count(*)::text
+    from vault.decrypted_secrets
+    where name like 'sam_license_%'
+  ),
+  true
+);
+
 create or replace function private.test_fail_license_secret_insert()
 returns trigger
 language plpgsql
@@ -1470,6 +1639,16 @@ select is(
   (select count(*)::text from private.license_secrets),
   current_setting('test.private_secret_count'),
   'injected secret failure rolls back the private reference row'
+);
+
+select is(
+  (
+    select count(*)::text
+    from vault.decrypted_secrets
+    where name like 'sam_license_%'
+  ),
+  current_setting('test.vault_license_secret_count'),
+  'injected secret failure leaves no orphaned named Vault secret'
 );
 
 select * from finish();
