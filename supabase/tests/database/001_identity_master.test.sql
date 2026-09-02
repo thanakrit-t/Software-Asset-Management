@@ -1,6 +1,6 @@
 begin;
 
-select plan(25);
+select plan(30);
 
 select has_schema('private', 'private schema exists');
 select has_schema('audit', 'audit schema exists');
@@ -96,6 +96,39 @@ select is(
   (select display_name from public.profiles where id = '10000000-0000-4000-8000-000000000001'),
   'new.user',
   'profile bootstrap derives a safe display name from email'
+);
+
+delete from public.profiles
+where id = '10000000-0000-4000-8000-000000000001';
+
+select is(
+  private.sync_missing_auth_profiles(),
+  1,
+  'missing Auth profiles are backfilled'
+);
+
+select is(
+  (select app_role::text from public.profiles where id = '10000000-0000-4000-8000-000000000001'),
+  'user',
+  'backfilled profiles default to user'
+);
+
+select is(
+  (select account_status::text from public.profiles where id = '10000000-0000-4000-8000-000000000001'),
+  'active',
+  'backfilled profiles default to active'
+);
+
+select is(
+  (select display_name from public.profiles where id = '10000000-0000-4000-8000-000000000001'),
+  'new.user',
+  'backfilled profiles derive a safe display name from email'
+);
+
+select is(
+  private.sync_missing_auth_profiles(),
+  0,
+  'profile backfill is idempotent'
 );
 
 select * from finish();
