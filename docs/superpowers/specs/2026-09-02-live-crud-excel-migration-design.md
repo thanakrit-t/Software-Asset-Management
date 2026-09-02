@@ -99,8 +99,9 @@ Database error codes map to Thai, actionable UI messages:
 | Master Data | Create where supported, Edit, Archive | View | Referenced values remain in history and are removed from new-entry choices |
 | User | Edit Role, Activate, Deactivate | None | Last active Admin is protected |
 | Notification | Read/Unread, Dismiss | Read/Unread, Dismiss own | Recipient-scoped state only; source event is unchanged |
+| System Settings | Edit | None | Admin-only optimistic update with validated policy values |
 | Audit Log | View | None | Append-only |
-| Report | View, Export | View, Export | No data mutation |
+| Report | View, Export | View, Export | Export returns safe fields and records an Audit event |
 | Migration Review | Review, acknowledge, publish | None | Admin-only; unavailable as recurring import after completion |
 
 ## 6. UI Design
@@ -144,16 +145,20 @@ Add or complete narrowly scoped RPCs rather than granting table writes:
 - `create_software_product(payload)`
 - `update_software_product(product_id, expected_version, payload)`
 - `archive_software_product(product_id, expected_version, reason)`
-- `create_license_entitlement(payload)`
+- `create_license_entitlement(payload, secret_payload)`
 - `update_license_entitlement(entitlement_id, expected_version, payload)`
 - `archive_license_entitlement(entitlement_id, expected_version, reason)`
+- `rotate_license_secret(entitlement_id, secret_type, value, reason)`
+- `reveal_license_secret(entitlement_id, secret_type, correlation_id)`
 - Existing `allocate_license(payload)`
 - Existing `release_license_allocation(allocation_id, expected_version, reason)`
 - `update_master_data(entity_type, entity_id, expected_version, payload)`
 - `archive_master_data(entity_type, entity_id, expected_version, reason)`
 - Existing `set_user_role(profile_id, new_role, reason)`
 - Existing `set_user_status(profile_id, new_status, reason)`
-- `set_notification_state(notification_id, is_read, is_dismissed)`
+- `set_notification_state(recipient_id, is_read, is_dismissed)`
+- `update_system_settings(expected_version, payload)`
+- `export_report(report_type, filters)`
 - `validate_import_batch(import_batch_id)`
 - `publish_import_batch(import_batch_id, expected_version, acknowledge_warnings)`
 
@@ -274,7 +279,7 @@ This screen reviews the approved bundled source files; it is not a permanent sel
 6. Insert Assets, network records, assignments, Software Products, installed-software inventory, Licenses, secret references, and resolvable Allocations.
 7. Preserve `migration_batch_id` and source-row traceability.
 8. Create reconciliation totals and an Audit event.
-9. Mark the batch published only after every write succeeds.
+9. Mark the batch `committed` (the database status representing Published) only after every write succeeds.
 10. Roll back the entire transaction on any failure.
 
 Re-running extraction is safe. Publishing the same approved source fingerprint twice is not allowed.
