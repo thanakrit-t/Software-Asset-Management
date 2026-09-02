@@ -1,6 +1,6 @@
 begin;
 
-select plan(24);
+select plan(28);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
@@ -144,6 +144,76 @@ select is(
   (select count(*)::integer from public.system_settings),
   1,
   'system settings contains exactly one row'
+);
+
+insert into auth.users (
+  id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, email_change, email_change_token_new, recovery_token
+)
+values
+  (
+    '24000000-0000-4000-8000-000000000001',
+    '00000000-0000-0000-0000-000000000000',
+    'authenticated', 'authenticated', 'asset-admin@test.local',
+    crypt('local-test-only', gen_salt('bf')), now(),
+    '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', ''
+  ),
+  (
+    '24000000-0000-4000-8000-000000000002',
+    '00000000-0000-0000-0000-000000000000',
+    'authenticated', 'authenticated', 'asset-user@test.local',
+    crypt('local-test-only', gen_salt('bf')), now(),
+    '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', ''
+  );
+
+update public.profiles
+set app_role = 'admin'
+where id = '24000000-0000-4000-8000-000000000001';
+
+select set_config('test.asset_id', '22000000-0000-4000-8000-000000000001', true);
+select set_config('test.product_id', '21000000-0000-4000-8000-000000000001', true);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000002","role":"authenticated"}',
+  true
+);
+
+select throws_ok(
+  $$ select public.update_asset('00000000-0000-0000-0000-000000000001', 1, '{}'::jsonb) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot update an asset'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select lives_ok(
+  $$ select public.update_asset(
+    current_setting('test.asset_id')::uuid,
+    1,
+    jsonb_build_object('computer_name', 'TDD-PC-UPDATED')
+  ) $$,
+  'admin updates an asset with the expected version'
+);
+
+select throws_ok(
+  $$ select public.update_asset(current_setting('test.asset_id')::uuid, 1, '{}'::jsonb) $$,
+  '40001', 'VERSION_CONFLICT',
+  'stale asset updates are rejected'
+);
+
+select throws_ok(
+  $$ select public.archive_software_product(
+    current_setting('test.product_id')::uuid, 1, ''
+  ) $$,
+  '22023', 'REASON_REQUIRED',
+  'software archive requires a reason'
 );
 
 select * from finish();
