@@ -150,15 +150,22 @@ declare
   resolved_department_id uuid;
   resolved_internet_level_id uuid;
   resolved_operating_system_product_id uuid;
+  transition_reason text;
 begin
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
 
   select * into before_row
-  from public.assets
-  where id = asset_id
+  from public.assets as asset
+  where asset.id = update_asset.asset_id
+    and asset.version = update_asset.expected_version
+    and asset.archived_at is null
   for update;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
 
   resolved_asset_type_id := before_row.asset_type_id;
   resolved_asset_status_id := before_row.asset_status_id;
@@ -189,6 +196,13 @@ begin
 
     if resolved_asset_status_id is null then
       raise exception using errcode = '22023', message = 'INVALID_ASSET_REFERENCE';
+    end if;
+
+    if resolved_asset_status_id is distinct from before_row.asset_status_id then
+      if btrim(coalesce(payload->>'reason', '')) = '' then
+        raise exception using errcode = '22023', message = 'REASON_REQUIRED';
+      end if;
+      transition_reason := btrim(payload->>'reason');
     end if;
   end if;
 
@@ -302,12 +316,13 @@ begin
 
   insert into audit.audit_events (
     actor_profile_id, actor_type, action, entity_type, entity_id,
-    description, old_values, new_values
+    description, old_values, new_values, reason
   ) values (
     auth.uid(), 'user', 'update', 'asset', result.id,
     'Asset updated',
     to_jsonb(before_row) - array['created_by','updated_by'],
-    to_jsonb(result) - array['created_by','updated_by']
+    to_jsonb(result) - array['created_by','updated_by'],
+    transition_reason
   );
 
   return result;
@@ -334,14 +349,20 @@ begin
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
 
+  select * into before_row
+  from public.assets as asset
+  where asset.id = archive_asset.asset_id
+    and asset.version = archive_asset.expected_version
+    and asset.archived_at is null
+  for update;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
+
   if btrim(coalesce(reason, '')) = '' then
     raise exception using errcode = '22023', message = 'REASON_REQUIRED';
   end if;
-
-  select * into before_row
-  from public.assets
-  where id = asset_id
-  for update;
 
   select count(*)::integer into active_allocation_count
   from public.license_allocations as allocation
@@ -458,15 +479,22 @@ declare
   result public.software_products%rowtype;
   resolved_publisher_id uuid;
   resolved_category_id uuid;
+  transition_reason text;
 begin
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
 
   select * into before_row
-  from public.software_products
-  where id = product_id
+  from public.software_products as product
+  where product.id = update_software_product.product_id
+    and product.version = update_software_product.expected_version
+    and product.archived_at is null
   for update;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
 
   resolved_publisher_id := before_row.publisher_id;
   resolved_category_id := before_row.category_id;
@@ -493,6 +521,15 @@ begin
     if resolved_category_id is null then
       raise exception using errcode = '22023', message = 'INVALID_SOFTWARE_REFERENCE';
     end if;
+  end if;
+
+  if payload ? 'support_status'
+    and coalesce(nullif(btrim(payload->>'support_status'), ''), 'unknown')
+      is distinct from before_row.support_status then
+    if btrim(coalesce(payload->>'reason', '')) = '' then
+      raise exception using errcode = '22023', message = 'REASON_REQUIRED';
+    end if;
+    transition_reason := btrim(payload->>'reason');
   end if;
 
   update public.software_products
@@ -524,12 +561,13 @@ begin
 
   insert into audit.audit_events (
     actor_profile_id, actor_type, action, entity_type, entity_id,
-    description, old_values, new_values
+    description, old_values, new_values, reason
   ) values (
     auth.uid(), 'user', 'update', 'software_product', result.id,
     'Software product updated',
     to_jsonb(before_row) - array['created_by','updated_by'],
-    to_jsonb(result) - array['created_by','updated_by']
+    to_jsonb(result) - array['created_by','updated_by'],
+    transition_reason
   );
 
   return result;
@@ -554,14 +592,20 @@ begin
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
 
+  select * into before_row
+  from public.software_products as product
+  where product.id = archive_software_product.product_id
+    and product.version = archive_software_product.expected_version
+    and product.archived_at is null
+  for update;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
+
   if btrim(coalesce(reason, '')) = '' then
     raise exception using errcode = '22023', message = 'REASON_REQUIRED';
   end if;
-
-  select * into before_row
-  from public.software_products
-  where id = product_id
-  for update;
 
   update public.software_products
   set archived_at = now(),
