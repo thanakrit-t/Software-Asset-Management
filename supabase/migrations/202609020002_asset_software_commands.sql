@@ -313,3 +313,298 @@ begin
   return result;
 end;
 $$;
+
+create or replace function public.archive_asset(
+  asset_id uuid,
+  expected_version integer,
+  reason text,
+  acknowledge_allocations boolean
+)
+returns public.assets
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  before_row public.assets%rowtype;
+  result public.assets%rowtype;
+  active_allocation_count integer;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  if btrim(coalesce(reason, '')) = '' then
+    raise exception using errcode = '22023', message = 'REASON_REQUIRED';
+  end if;
+
+  select * into before_row
+  from public.assets
+  where id = asset_id
+  for update;
+
+  select count(*)::integer into active_allocation_count
+  from public.license_allocations as allocation
+  where allocation.asset_id = archive_asset.asset_id
+    and allocation.allocation_status = 'active';
+
+  if active_allocation_count > 0 and not coalesce(acknowledge_allocations, false) then
+    raise exception using errcode = 'P0001', message = 'ACTIVE_ALLOCATIONS_EXIST';
+  end if;
+
+  update public.assets
+  set archived_at = now(),
+      archived_by = auth.uid(),
+      updated_by = auth.uid()
+  where id = asset_id
+    and version = expected_version
+    and archived_at is null
+  returning * into result;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, old_values, new_values, reason
+  ) values (
+    auth.uid(), 'user', 'archive', 'asset', result.id,
+    'Asset archived',
+    to_jsonb(before_row) - array['created_by','updated_by'],
+    to_jsonb(result) - array['created_by','updated_by'],
+    reason
+  );
+
+  return result;
+end;
+$$;
+
+create or replace function public.create_software_product(payload jsonb)
+returns public.software_products
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  resolved_publisher_id uuid;
+  resolved_category_id uuid;
+  result public.software_products%rowtype;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  select publisher.id into resolved_publisher_id
+  from public.publishers as publisher
+  where publisher.id = (payload->>'publisher_id')::uuid
+    and publisher.is_active
+    and publisher.archived_at is null;
+
+  select category.id into resolved_category_id
+  from public.software_categories as category
+  where category.id = (payload->>'category_id')::uuid
+    and category.is_active
+    and category.archived_at is null;
+
+  if resolved_publisher_id is null or resolved_category_id is null then
+    raise exception using errcode = '22023', message = 'INVALID_SOFTWARE_REFERENCE';
+  end if;
+
+  insert into public.software_products (
+    publisher_id, category_id, name, version_edition, support_status,
+    end_of_life_date, remark, created_by, updated_by
+  ) values (
+    resolved_publisher_id,
+    resolved_category_id,
+    btrim(payload->>'name'),
+    coalesce(btrim(payload->>'version_edition'), ''),
+    coalesce(nullif(btrim(payload->>'support_status'), ''), 'unknown'),
+    (payload->>'end_of_life_date')::date,
+    nullif(btrim(payload->>'remark'), ''),
+    auth.uid(),
+    auth.uid()
+  )
+  returning * into result;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, new_values
+  ) values (
+    auth.uid(), 'user', 'create', 'software_product', result.id,
+    'Software product created',
+    to_jsonb(result) - array['created_by','updated_by']
+  );
+
+  return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'DUPLICATE_RECORD';
+end;
+$$;
+
+create or replace function public.update_software_product(
+  product_id uuid,
+  expected_version integer,
+  payload jsonb
+)
+returns public.software_products
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  before_row public.software_products%rowtype;
+  result public.software_products%rowtype;
+  resolved_publisher_id uuid;
+  resolved_category_id uuid;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  select * into before_row
+  from public.software_products
+  where id = product_id
+  for update;
+
+  resolved_publisher_id := before_row.publisher_id;
+  resolved_category_id := before_row.category_id;
+
+  if payload ? 'publisher_id' then
+    select publisher.id into resolved_publisher_id
+    from public.publishers as publisher
+    where publisher.id = (payload->>'publisher_id')::uuid
+      and publisher.is_active
+      and publisher.archived_at is null;
+
+    if resolved_publisher_id is null then
+      raise exception using errcode = '22023', message = 'INVALID_SOFTWARE_REFERENCE';
+    end if;
+  end if;
+
+  if payload ? 'category_id' then
+    select category.id into resolved_category_id
+    from public.software_categories as category
+    where category.id = (payload->>'category_id')::uuid
+      and category.is_active
+      and category.archived_at is null;
+
+    if resolved_category_id is null then
+      raise exception using errcode = '22023', message = 'INVALID_SOFTWARE_REFERENCE';
+    end if;
+  end if;
+
+  update public.software_products
+  set publisher_id = resolved_publisher_id,
+      category_id = resolved_category_id,
+      name = coalesce(nullif(btrim(payload->>'name'), ''), name),
+      version_edition = case
+        when payload ? 'version_edition' then coalesce(btrim(payload->>'version_edition'), '')
+        else version_edition
+      end,
+      support_status = case
+        when payload ? 'support_status' then coalesce(nullif(btrim(payload->>'support_status'), ''), 'unknown')
+        else support_status
+      end,
+      end_of_life_date = case
+        when payload ? 'end_of_life_date' then (payload->>'end_of_life_date')::date
+        else end_of_life_date
+      end,
+      remark = case when payload ? 'remark' then nullif(btrim(payload->>'remark'), '') else remark end,
+      updated_by = auth.uid()
+  where id = product_id
+    and version = expected_version
+    and archived_at is null
+  returning * into result;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, old_values, new_values
+  ) values (
+    auth.uid(), 'user', 'update', 'software_product', result.id,
+    'Software product updated',
+    to_jsonb(before_row) - array['created_by','updated_by'],
+    to_jsonb(result) - array['created_by','updated_by']
+  );
+
+  return result;
+end;
+$$;
+
+create or replace function public.archive_software_product(
+  product_id uuid,
+  expected_version integer,
+  reason text
+)
+returns public.software_products
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  before_row public.software_products%rowtype;
+  result public.software_products%rowtype;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  if btrim(coalesce(reason, '')) = '' then
+    raise exception using errcode = '22023', message = 'REASON_REQUIRED';
+  end if;
+
+  select * into before_row
+  from public.software_products
+  where id = product_id
+  for update;
+
+  update public.software_products
+  set archived_at = now(),
+      archived_by = auth.uid(),
+      updated_by = auth.uid()
+  where id = product_id
+    and version = expected_version
+    and archived_at is null
+  returning * into result;
+
+  if not found then
+    raise exception using errcode = '40001', message = 'VERSION_CONFLICT';
+  end if;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, old_values, new_values, reason
+  ) values (
+    auth.uid(), 'user', 'archive', 'software_product', result.id,
+    'Software product archived',
+    to_jsonb(before_row) - array['created_by','updated_by'],
+    to_jsonb(result) - array['created_by','updated_by'],
+    reason
+  );
+
+  return result;
+end;
+$$;
+
+revoke all on function public.create_asset(jsonb) from public, anon;
+grant execute on function public.create_asset(jsonb) to authenticated;
+
+revoke all on function public.update_asset(uuid, integer, jsonb) from public, anon;
+grant execute on function public.update_asset(uuid, integer, jsonb) to authenticated;
+
+revoke all on function public.archive_asset(uuid, integer, text, boolean) from public, anon;
+grant execute on function public.archive_asset(uuid, integer, text, boolean) to authenticated;
+
+revoke all on function public.create_software_product(jsonb) from public, anon;
+grant execute on function public.create_software_product(jsonb) to authenticated;
+
+revoke all on function public.update_software_product(uuid, integer, jsonb) from public, anon;
+grant execute on function public.update_software_product(uuid, integer, jsonb) to authenticated;
+
+revoke all on function public.archive_software_product(uuid, integer, text) from public, anon;
+grant execute on function public.archive_software_product(uuid, integer, text) to authenticated;
