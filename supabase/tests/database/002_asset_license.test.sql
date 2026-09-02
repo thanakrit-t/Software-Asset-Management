@@ -1,10 +1,22 @@
 begin;
 
-select plan(22);
+select plan(24);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
 select has_table('public', 'assets', 'assets table exists');
+select has_index(
+  'public',
+  'assets',
+  'assets_asset_code_trgm_idx',
+  'asset code trigram index exists'
+);
+select has_index(
+  'public',
+  'assets',
+  'assets_computer_name_trgm_idx',
+  'computer name trigram index exists'
+);
 select has_table('public', 'asset_network_interfaces', 'network interfaces table exists');
 select has_table('public', 'asset_person_assignments', 'person assignments table exists');
 select has_table('public', 'asset_software_installations', 'software installations table exists');

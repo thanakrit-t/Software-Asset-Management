@@ -106,8 +106,8 @@ create index assets_site_idx on public.assets (site_id);
 create index assets_asset_type_idx on public.assets (asset_type_id);
 create index assets_asset_status_idx on public.assets (asset_status_id);
 create index assets_department_idx on public.assets (department_id);
-create index assets_asset_code_trgm_idx on public.assets using gin (asset_code gin_trgm_ops);
-create index assets_computer_name_trgm_idx on public.assets using gin (computer_name gin_trgm_ops);
+create index assets_asset_code_trgm_idx on public.assets using gin (asset_code extensions.gin_trgm_ops);
+create index assets_computer_name_trgm_idx on public.assets using gin (computer_name extensions.gin_trgm_ops);
 
 create table public.asset_network_interfaces (
   id uuid primary key default gen_random_uuid(),
