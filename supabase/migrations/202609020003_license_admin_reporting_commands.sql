@@ -577,32 +577,49 @@ declare
 begin
   foreach candidate_value in array coalesce(candidates, array[]::text[])
   loop
-    if pg_catalog.regexp_replace(
-      coalesce(candidate_value, ''),
-      '[[:space:]]',
-      '',
-      'g'
-    ) = '' then
-      continue;
+    license_key_candidate_fingerprint := null;
+    serial_candidate_fingerprint := null;
+
+    if coalesce(
+      private.normalize_license_secret('license_key', candidate_value),
+      ''
+    ) <> '' then
+      license_key_candidate_fingerprint :=
+        private.fingerprint_license_secret('license_key', candidate_value);
     end if;
 
-    license_key_candidate_fingerprint :=
-      private.fingerprint_license_secret('license_key', candidate_value);
-    serial_candidate_fingerprint :=
-      private.fingerprint_license_secret('serial_number', candidate_value);
+    if coalesce(
+      private.normalize_license_secret('serial_number', candidate_value),
+      ''
+    ) <> '' then
+      serial_candidate_fingerprint :=
+        private.fingerprint_license_secret('serial_number', candidate_value);
+    end if;
 
     if exists (
       select 1
       from private.license_secrets as stored_secret
-      where stored_secret.license_key_fingerprint =
-          license_key_candidate_fingerprint
-        or stored_secret.serial_fingerprint = serial_candidate_fingerprint
+      where (
+          license_key_candidate_fingerprint is not null
+          and stored_secret.license_key_fingerprint =
+            license_key_candidate_fingerprint
+        )
+        or (
+          serial_candidate_fingerprint is not null
+          and stored_secret.serial_fingerprint = serial_candidate_fingerprint
+        )
     )
-    or license_key_candidate_fingerprint = any (
-      coalesce(additional_fingerprints, array[]::bytea[])
+    or (
+      license_key_candidate_fingerprint is not null
+      and license_key_candidate_fingerprint = any (
+        coalesce(additional_fingerprints, array[]::bytea[])
+      )
     )
-    or serial_candidate_fingerprint = any (
-      coalesce(additional_fingerprints, array[]::bytea[])
+    or (
+      serial_candidate_fingerprint is not null
+      and serial_candidate_fingerprint = any (
+        coalesce(additional_fingerprints, array[]::bytea[])
+      )
     ) then
       raise exception using
         errcode = 'P0001',
@@ -953,6 +970,7 @@ set search_path = ''
 as $$
 declare
   secret_ref private.license_secrets%rowtype;
+  before_row public.license_entitlements%rowtype;
   result public.license_entitlements%rowtype;
   selected_vault_id uuid;
   new_fingerprint bytea;
@@ -974,7 +992,8 @@ begin
     raise exception using errcode = '22023', message = 'INVALID_SECRET_VALUE';
   end if;
 
-  perform entitlement.id
+  select *
+  into before_row
   from public.license_entitlements as entitlement
   where entitlement.id = rotate_license_secret.entitlement_id
     and entitlement.archived_at is null
@@ -1006,7 +1025,15 @@ begin
 
   new_fingerprint := private.fingerprint_license_secret(secret_type, value);
   perform private.assert_no_license_secret_collision(
-    array[reason]::text[],
+    array[
+      before_row.license_reference,
+      before_row.invoice_reference,
+      before_row.po_reference,
+      before_row.contract_reference,
+      before_row.owner_name,
+      before_row.remark,
+      reason
+    ]::text[],
     array[new_fingerprint]::bytea[]
   );
   new_mask := private.mask_license_secret(value);

@@ -1,6 +1,6 @@
 begin;
 
-select plan(127);
+select plan(131);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
@@ -1106,6 +1106,17 @@ select throws_ok(
 );
 rollback to savepoint update_reason_secret_collision;
 
+savepoint update_hyphen_only_remark;
+select lives_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.created_license_id')::uuid,
+    1,
+    jsonb_build_object('remark', '---')
+  ) $$,
+  'license update accepts a benign hyphen-only free-text value'
+);
+rollback to savepoint update_hyphen_only_remark;
+
 select lives_ok(
   $$ select public.update_license_entitlement(
     current_setting('test.created_license_id')::uuid,
@@ -1152,6 +1163,44 @@ select is(
   true,
   'license inventory export exposes no plaintext, Vault UUID, or fingerprint'
 );
+
+savepoint rotate_existing_field_collision_raw;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'TDD-SECRET-LICENSE',
+    'Routine key renewal'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects a new value matching an existing ordinary field'
+);
+rollback to savepoint rotate_existing_field_collision_raw;
+
+savepoint rotate_existing_field_collision_normalized;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'metadata-updated-safely',
+    'Routine key renewal'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects a new value normalized to an existing audited field'
+);
+rollback to savepoint rotate_existing_field_collision_normalized;
+
+savepoint rotate_hyphen_only_reason;
+select lives_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'ROTATE-SAFE-003',
+    '---'
+  ) $$,
+  'secret rotation accepts a benign hyphen-only reason'
+);
+rollback to savepoint rotate_hyphen_only_reason;
 
 savepoint rotate_reason_secret_collision_raw;
 select throws_ok(
