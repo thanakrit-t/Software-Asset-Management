@@ -1,6 +1,6 @@
 begin;
 
-select plan(65);
+select plan(115);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
@@ -202,6 +202,20 @@ values (
   current_date
 );
 
+insert into public.license_entitlements (
+  id, license_reference, software_product_id, license_metric_id,
+  owned_quantity, record_status, scope_mode
+)
+values (
+  '23000000-0000-4000-8000-000000000003',
+  'ARCHIVE-LICENSE',
+  '21000000-0000-4000-8000-000000000001',
+  '14000000-0000-4000-8000-000000000001',
+  1,
+  'active',
+  'all_sites'
+);
+
 select is(
   (select count(*)::integer from public.system_settings),
   1,
@@ -233,8 +247,41 @@ update public.profiles
 set app_role = 'admin'
 where id = '24000000-0000-4000-8000-000000000001';
 
+insert into public.notifications (
+  id, notification_type, severity, title, message,
+  deduplication_key, event_date
+)
+values (
+  '25000000-0000-4000-8000-000000000001',
+  'job_failure',
+  'warning',
+  'TDD notification',
+  'TDD notification message',
+  'task-2-tdd-notification',
+  current_date
+);
+
+insert into public.notification_recipients (
+  id, notification_id, profile_id, delivered_at
+)
+values
+  (
+    '25000000-0000-4000-8000-000000000002',
+    '25000000-0000-4000-8000-000000000001',
+    '24000000-0000-4000-8000-000000000002',
+    now()
+  ),
+  (
+    '25000000-0000-4000-8000-000000000003',
+    '25000000-0000-4000-8000-000000000001',
+    '24000000-0000-4000-8000-000000000001',
+    now()
+  );
+
 select set_config('test.asset_id', '22000000-0000-4000-8000-000000000001', true);
 select set_config('test.product_id', '21000000-0000-4000-8000-000000000001', true);
+select set_config('test.license_id', '23000000-0000-4000-8000-000000000001', true);
+select set_config('test.notification_id', '25000000-0000-4000-8000-000000000002', true);
 
 set local role authenticated;
 select set_config(
@@ -283,6 +330,49 @@ select throws_ok(
   ) $$,
   '42501', 'ACCESS_DENIED',
   'regular user cannot archive a software product'
+);
+
+select throws_ok(
+  $$ select public.create_license_entitlement('{}'::jsonb, '{}'::jsonb) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot create a license entitlement'
+);
+
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.license_id')::uuid, 1, '{}'::jsonb
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot update a license entitlement'
+);
+
+select throws_ok(
+  $$ select public.archive_license_entitlement(
+    current_setting('test.license_id')::uuid, 1, 'Denied archive'
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot archive a license entitlement'
+);
+
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.license_id')::uuid,
+    'license_key',
+    'DENIED-SECRET',
+    'Denied rotation'
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot rotate a license secret'
+);
+
+select throws_ok(
+  $$ select public.reveal_license_secret(
+    current_setting('test.license_id')::uuid,
+    'license_key',
+    gen_random_uuid()
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular user cannot reveal a license secret'
 );
 
 select set_config(
@@ -719,6 +809,667 @@ select is(
   ),
   'Product retired',
   'archive_software_product writes its reason to audit'
+);
+
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.license_id')::uuid,
+    1,
+    jsonb_build_object('owned_quantity', 0)
+  ) $$,
+  'P0001', 'OWNED_BELOW_ALLOCATED',
+  'owned quantity cannot fall below active allocation'
+);
+
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.license_id')::uuid,
+    1,
+    jsonb_build_object('license_key', 'PLAINTEXT-IN-ORDINARY-PAYLOAD')
+  ) $$,
+  '22023', 'INVALID_PAYLOAD',
+  'ordinary license updates reject secret fields'
+);
+
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.license_id')::uuid,
+    1,
+    jsonb_build_object('record_status', 'deactivated')
+  ) $$,
+  '22023', 'REASON_REQUIRED',
+  'license lifecycle transitions require a reason'
+);
+
+select throws_ok(
+  $$ select public.archive_license_entitlement(
+    current_setting('test.license_id')::uuid,
+    1,
+    'retired contract'
+  ) $$,
+  'P0001', 'ACTIVE_ALLOCATIONS_EXIST',
+  'license with active allocations cannot be archived'
+);
+
+select throws_ok(
+  $$
+    select public.create_license_entitlement(
+      jsonb_build_object(
+        'license_reference', 'NO-PEPPER-LICENSE',
+        'software_product_id', current_setting('test.product_id'),
+        'owned_quantity', 1,
+        'license_metric', 'device'
+      ),
+      jsonb_build_object('license_key', 'NO-PEPPER-KEY')
+    )
+  $$,
+  'P0001', 'SECRET_PEPPER_NOT_CONFIGURED',
+  'secret writes fail closed when the Vault fingerprint pepper is missing'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from public.license_entitlements
+    where license_reference = 'NO-PEPPER-LICENSE'
+  ),
+  0,
+  'missing pepper failure leaves no entitlement row'
+);
+
+reset role;
+do $$
+begin
+  perform vault.create_secret(
+    'TDD-ONLY-FINGERPRINT-PEPPER',
+    'sam_license_fingerprint_pepper',
+    'Disposable pgTAP pepper'
+  );
+end;
+$$;
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select lives_ok(
+  $$
+    select set_config(
+      'test.created_license_id',
+      (
+        select id::text
+        from public.create_license_entitlement(
+          jsonb_build_object(
+            'license_reference', 'TDD-SECRET-LICENSE',
+            'software_product_id', current_setting('test.product_id'),
+            'owned_quantity', 1,
+            'license_metric', 'device',
+            'record_status', 'active',
+            'scope_mode', 'all_sites'
+          ),
+          jsonb_build_object(
+            'license_key', 'TEST-KEY-001',
+            'serial_number', 'SERIAL 001'
+          )
+        )
+      ),
+      true
+    )
+  $$,
+  'admin creates an entitlement and stores supplied secrets through Vault'
+);
+
+select results_eq(
+  $$
+    select
+      right(license_key_masked, 5),
+      license_key_masked = 'TEST-KEY-001',
+      right(serial_number_masked, 5),
+      serial_number_masked = 'SERIAL 001'
+    from public.license_entitlements
+    where id = current_setting('test.created_license_id')::uuid
+  $$,
+  $$ values ('Y-001'::text, false, 'L 001'::text, false) $$,
+  'license create stores suffix masks instead of plaintext'
+);
+
+reset role;
+
+select results_eq(
+  $$
+    select
+      license_key_vault_secret_id is not null,
+      serial_vault_secret_id is not null
+    from private.license_secrets
+    where license_entitlement_id = current_setting('test.created_license_id')::uuid
+  $$,
+  $$ values (true, true) $$,
+  'license create stores only non-null Vault references in the private row'
+);
+
+select is(
+  (
+    select pg_catalog.jsonb_build_array(
+      license_key.decrypted_secret,
+      serial.decrypted_secret
+    )
+    from private.license_secrets as secret_ref
+    join vault.decrypted_secrets as license_key
+      on license_key.id = secret_ref.license_key_vault_secret_id
+    join vault.decrypted_secrets as serial
+      on serial.id = secret_ref.serial_vault_secret_id
+    where secret_ref.license_entitlement_id =
+      current_setting('test.created_license_id')::uuid
+  ),
+  '["TEST-KEY-001", "SERIAL 001"]'::jsonb,
+  'license create writes both plaintext values only to Vault'
+);
+
+select results_eq(
+  $$
+    select
+      license_key_fingerprint is not null,
+      serial_fingerprint is not null
+    from private.license_secrets
+    where license_entitlement_id = current_setting('test.created_license_id')::uuid
+  $$,
+  $$ values (true, true) $$,
+  'license create writes HMAC fingerprints to the private row'
+);
+
+select set_config(
+  'test.license_key_vault_id',
+  license_key_vault_secret_id::text,
+  true
+)
+from private.license_secrets
+where license_entitlement_id = current_setting('test.created_license_id')::uuid;
+
+select set_config(
+  'test.license_key_fingerprint',
+  encode(license_key_fingerprint, 'hex'),
+  true
+)
+from private.license_secrets
+where license_entitlement_id = current_setting('test.created_license_id')::uuid;
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select is(
+  (
+    select
+      position('TEST-KEY-001' in to_jsonb(safe_row)::text) = 0
+      and position(
+        current_setting('test.license_key_vault_id')
+        in to_jsonb(safe_row)::text
+      ) = 0
+      and position(
+        current_setting('test.license_key_fingerprint')
+        in to_jsonb(safe_row)::text
+      ) = 0
+    from public.license_safe_v as safe_row
+    where id = current_setting('test.created_license_id')::uuid
+  ),
+  true,
+  'ordinary license view exposes no plaintext, Vault UUID, or fingerprint'
+);
+
+select lives_ok(
+  $$ select public.update_license_entitlement(
+    current_setting('test.created_license_id')::uuid,
+    1,
+    jsonb_build_object('remark', 'Metadata updated safely')
+  ) $$,
+  'admin updates license metadata with optimistic locking'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from public.audit_log_admin_v
+    where action = 'update'
+      and entity_type = 'license_entitlement'
+      and entity_id = current_setting('test.created_license_id')::uuid
+      and new_values->>'remark' = 'Metadata updated safely'
+  ),
+  1,
+  'license metadata update writes a redacted audit event'
+);
+
+select is(
+  (
+    select
+      position('TEST-KEY-001' in report_row::text) = 0
+      and position(
+        current_setting('test.license_key_vault_id')
+        in report_row::text
+      ) = 0
+      and position(
+        current_setting('test.license_key_fingerprint')
+        in report_row::text
+      ) = 0
+    from public.export_report(
+      'license_inventory',
+      jsonb_build_object(
+        'software_product_id',
+        current_setting('test.product_id')
+      )
+    ) as report_row
+    where report_row->>'id' = current_setting('test.created_license_id')
+  ),
+  true,
+  'license inventory export exposes no plaintext, Vault UUID, or fingerprint'
+);
+
+select lives_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    ' test key-001 ',
+    'Equivalent formatting rotation'
+  ) $$,
+  'admin rotates a license secret through the Vault boundary'
+);
+
+reset role;
+
+select is(
+  (
+    select license_key_vault_secret_id::text
+    from private.license_secrets
+    where license_entitlement_id = current_setting('test.created_license_id')::uuid
+  ),
+  current_setting('test.license_key_vault_id'),
+  'secret rotation updates the existing Vault entry instead of replacing its reference'
+);
+
+select is(
+  (
+    select encode(license_key_fingerprint, 'hex')
+    from private.license_secrets
+    where license_entitlement_id = current_setting('test.created_license_id')::uuid
+  ),
+  current_setting('test.license_key_fingerprint'),
+  'normalized exact-equivalent license keys have the same HMAC fingerprint'
+);
+
+select is(
+  (
+    select right(license_key_masked, 5)
+    from public.license_entitlements
+    where id = current_setting('test.created_license_id')::uuid
+  ),
+  'y-001',
+  'secret rotation refreshes the public masked hint'
+);
+
+select is(
+  (
+    select decrypted_secret
+    from vault.decrypted_secrets
+    where id = current_setting('test.license_key_vault_id')::uuid
+  ),
+  ' test key-001 ',
+  'secret rotation updates Vault with the new plaintext value'
+);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select results_eq(
+  $$
+    select
+      reason,
+      position(
+        'test key-001'
+        in coalesce(old_values::text, '') ||
+           coalesce(new_values::text, '') ||
+           coalesce(metadata::text, '')
+      ) = 0
+    from public.audit_log_admin_v
+    where action = 'rotate_secret'
+      and entity_id = current_setting('test.created_license_id')::uuid
+  $$,
+  $$ values ('Equivalent formatting rotation'::text, true) $$,
+  'secret rotation audit contains the reason but not plaintext'
+);
+
+select throws_ok(
+  $$ select public.reveal_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    null
+  ) $$,
+  '22023', 'CORRELATION_ID_REQUIRED',
+  'secret reveal requires a caller-supplied correlation ID'
+);
+
+select is(
+  (
+    select secret_value
+    from public.reveal_license_secret(
+      current_setting('test.created_license_id')::uuid,
+      'license_key',
+      '26000000-0000-4000-8000-000000000001'
+    )
+  ),
+  ' test key-001 ',
+  'active admin reveals the selected plaintext only through the dedicated RPC'
+);
+
+select results_eq(
+  $$
+    select
+      correlation_id,
+      position(
+        'test key-001'
+        in coalesce(old_values::text, '') ||
+           coalesce(new_values::text, '') ||
+           coalesce(metadata::text, '') ||
+           description
+      ) = 0
+    from public.audit_log_admin_v
+    where action = 'reveal_secret'
+      and entity_id = current_setting('test.created_license_id')::uuid
+      and correlation_id = '26000000-0000-4000-8000-000000000001'
+  $$,
+  $$ values ('26000000-0000-4000-8000-000000000001'::uuid, true) $$,
+  'secret reveal audit records correlation without plaintext'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from public.audit_log_admin_v
+    where entity_id = current_setting('test.created_license_id')::uuid
+      and (
+        position(
+          'TEST-KEY-001'
+          in coalesce(old_values::text, '') ||
+             coalesce(new_values::text, '') ||
+             coalesce(metadata::text, '') ||
+             description ||
+             coalesce(reason, '')
+        ) > 0
+        or position(
+          'test key-001'
+          in coalesce(old_values::text, '') ||
+             coalesce(new_values::text, '') ||
+             coalesce(metadata::text, '') ||
+             description ||
+             coalesce(reason, '')
+        ) > 0
+      )
+  ),
+  0,
+  'all license audit events remain free of secret plaintext'
+);
+
+select throws_ok(
+  $$ select public.archive_license_entitlement(
+    '23000000-0000-4000-8000-000000000003', 1, ''
+  ) $$,
+  '22023', 'REASON_REQUIRED',
+  'license archive requires a reason'
+);
+
+select lives_ok(
+  $$ select public.archive_license_entitlement(
+    '23000000-0000-4000-8000-000000000003',
+    1,
+    'Contract retired'
+  ) $$,
+  'admin archives an unallocated license with a reason'
+);
+
+select results_eq(
+  $$
+    select record_status::text, archived_at is not null
+    from public.license_entitlements
+    where id = '23000000-0000-4000-8000-000000000003'
+  $$,
+  $$ values ('archived'::text, true) $$,
+  'license archive preserves the row with archived state'
+);
+
+select is(
+  (
+    select reason
+    from public.audit_log_admin_v
+    where action = 'archive'
+      and entity_type = 'license_entitlement'
+      and entity_id = '23000000-0000-4000-8000-000000000003'
+  ),
+  'Contract retired',
+  'license archive writes its reason to audit'
+);
+
+select lives_ok(
+  $$ select public.update_system_settings(
+    1,
+    jsonb_build_object(
+      'over_allocation_policy', 'allow_with_reason',
+      'reason', 'Temporary exception policy'
+    )
+  ) $$,
+  'admin updates validated settings with optimistic locking'
+);
+
+select results_eq(
+  $$ select over_allocation_policy, version from public.system_settings where id = 1 $$,
+  $$ values ('allow_with_reason'::text, 2::integer) $$,
+  'settings update persists the validated policy and increments version'
+);
+
+select is(
+  (
+    select reason
+    from public.audit_log_admin_v
+    where action = 'update'
+      and entity_type = 'system_settings'
+      and entity_id is null
+  ),
+  'Temporary exception policy',
+  'settings policy transition writes its reason to audit'
+);
+
+select throws_ok(
+  $$ select public.update_system_settings(
+    1, jsonb_build_object('organization_name', 'Stale')
+  ) $$,
+  '40001', 'VERSION_CONFLICT',
+  'settings update rejects a stale singleton version'
+);
+
+select throws_ok(
+  $$ select public.update_system_settings(
+    2, jsonb_build_object('over_allocation_policy', 'permit', 'reason', 'Invalid')
+  ) $$,
+  '22023', 'INVALID_SETTINGS',
+  'settings update rejects an unknown policy value'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000002","role":"authenticated"}',
+  true
+);
+
+select is(
+  (
+    select is_read
+    from public.set_notification_state(
+      current_setting('test.notification_id')::uuid,
+      true,
+      false
+    )
+  ),
+  true,
+  'recipient marks own notification read'
+);
+
+select results_eq(
+  $$
+    select is_read, read_at is not null, is_dismissed, dismissed_at is null
+    from public.notification_recipients
+    where id = current_setting('test.notification_id')::uuid
+  $$,
+  $$ values (true, true, false, true) $$,
+  'notification state keeps booleans and timestamps consistent'
+);
+
+reset role;
+
+select is(
+  (
+    select count(*)::integer
+    from audit.audit_events
+    where action = 'update'
+      and entity_type = 'notification_recipient'
+      and entity_id = current_setting('test.notification_id')::uuid
+      and actor_profile_id = '24000000-0000-4000-8000-000000000002'
+  ),
+  1,
+  'notification state mutation writes an audit event'
+);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000002","role":"authenticated"}',
+  true
+);
+
+select throws_ok(
+  $$ select public.set_notification_state(
+    '25000000-0000-4000-8000-000000000003',
+    true,
+    true
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'recipient cannot update another recipient row'
+);
+
+select results_eq(
+  $$
+    select report_row->>'asset_code'
+    from public.export_report('asset_inventory', '{}'::jsonb) as report_row
+    where report_row->>'asset_code' = 'TKC-001'
+  $$,
+  $$ values ('TKC-001'::text) $$,
+  'active user exports safe asset inventory rows through the audited boundary'
+);
+
+reset role;
+
+select is(
+  (
+    select count(*)::integer
+    from audit.audit_events
+    where action = 'export'
+      and entity_type = 'report'
+      and actor_profile_id = '24000000-0000-4000-8000-000000000002'
+      and metadata->>'report_type' = 'asset_inventory'
+  ),
+  1,
+  'report export writes an audit event'
+);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000002","role":"authenticated"}',
+  true
+);
+
+select throws_ok(
+  $$ select public.export_report('vault_dump', '{}'::jsonb) $$,
+  '22023', 'INVALID_REPORT_TYPE',
+  'report export rejects an unknown report type'
+);
+
+select throws_ok(
+  $$ select public.export_report(
+    'asset_inventory', jsonb_build_object('secret', 'TEST-KEY-001')
+  ) $$,
+  '22023', 'INVALID_FILTERS',
+  'report export rejects non-allowlisted filters'
+);
+
+reset role;
+select set_config(
+  'test.private_secret_count',
+  (select count(*)::text from private.license_secrets),
+  true
+);
+
+create or replace function private.test_fail_license_secret_insert()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  raise exception using
+    errcode = 'P0001',
+    message = 'INJECTED_SECRET_REFERENCE_FAILURE';
+end;
+$$;
+
+create trigger test_fail_license_secret_insert_trg
+before insert on private.license_secrets
+for each row execute function private.test_fail_license_secret_insert();
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"24000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select throws_ok(
+  $$
+    select public.create_license_entitlement(
+      jsonb_build_object(
+        'license_reference', 'ROLLBACK-LICENSE',
+        'software_product_id', current_setting('test.product_id'),
+        'owned_quantity', 1,
+        'license_metric', 'device'
+      ),
+      jsonb_build_object('license_key', 'ROLLBACK-SECRET')
+    )
+  $$,
+  'P0001', 'INJECTED_SECRET_REFERENCE_FAILURE',
+  'injected private-reference failure aborts license creation'
+);
+
+reset role;
+
+select is(
+  (
+    select count(*)::integer
+    from public.license_entitlements
+    where license_reference = 'ROLLBACK-LICENSE'
+  ),
+  0,
+  'injected secret failure rolls back the entitlement row'
+);
+
+select is(
+  (select count(*)::text from private.license_secrets),
+  current_setting('test.private_secret_count'),
+  'injected secret failure rolls back the private reference row'
 );
 
 select * from finish();

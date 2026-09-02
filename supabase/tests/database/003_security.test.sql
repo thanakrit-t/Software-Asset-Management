@@ -1,6 +1,6 @@
 begin;
 
-select plan(13);
+select plan(25);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -70,6 +70,13 @@ select throws_ok(
   'anon cannot read safe asset views'
 );
 
+select throws_ok(
+  $$ select public.create_license_entitlement('{}'::jsonb, '{}'::jsonb) $$,
+  '42501',
+  null,
+  'anon cannot execute license command RPCs'
+);
+
 reset role;
 set local role authenticated;
 select set_config(
@@ -117,6 +124,50 @@ select throws_ok(
   '42501',
   null,
   'users cannot access migration staging'
+);
+
+select throws_ok(
+  $$ select * from vault.decrypted_secrets $$,
+  '42501',
+  null,
+  'users cannot read decrypted Vault secrets'
+);
+
+select throws_ok(
+  $$ select vault.create_secret('FORBIDDEN-PLAINTEXT', 'forbidden-test-secret') $$,
+  '42501',
+  null,
+  'users cannot call Vault secret writers directly'
+);
+
+select throws_ok(
+  $$ select public.update_system_settings(
+    1, jsonb_build_object('organization_name', 'Forbidden')
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular users cannot update system settings'
+);
+
+select throws_ok(
+  $$ select public.update_master_data(
+    'software_category',
+    '13000000-0000-4000-8000-000000000001',
+    1,
+    jsonb_build_object('name_en', 'Forbidden')
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'regular users cannot update master data'
+);
+
+select throws_ok(
+  $$
+    update public.license_entitlements
+    set owned_quantity = 99
+    where id = '34000000-0000-4000-8000-000000000001'
+  $$,
+  '42501',
+  null,
+  'authenticated users have no direct license mutation grant'
 );
 
 reset role;
@@ -181,6 +232,85 @@ select is(
   (select count(*)::integer from public.license_allocations where license_entitlement_id = '34000000-0000-4000-8000-000000000001'),
   1,
   'release preserves allocation history'
+);
+
+reset role;
+
+select is(
+  (
+    select count(*)::integer
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name in (
+        select viewname
+        from pg_views
+        where schemaname = 'public'
+      )
+      and column_name ~ '(vault|fingerprint|pepper)'
+  ),
+  0,
+  'public views expose no Vault identifiers, fingerprints, or pepper fields'
+);
+
+select is(
+  has_function_privilege(
+    'anon',
+    'public.reveal_license_secret(uuid,text,uuid)',
+    'execute'
+  ),
+  false,
+  'anon has no execute grant on secret reveal'
+);
+
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.reveal_license_secret(uuid,text,uuid)',
+    'execute'
+  ),
+  true,
+  'authenticated role may execute only the guarded secret reveal boundary'
+);
+
+select is(
+  has_function_privilege(
+    'authenticated',
+    'private.fingerprint_license_secret(text,text)',
+    'execute'
+  ),
+  false,
+  'authenticated role cannot execute the private fingerprint helper'
+);
+
+select is(
+  has_table_privilege(
+    'authenticated',
+    'vault.decrypted_secrets',
+    'select'
+  ),
+  false,
+  'authenticated role has no direct decrypted Vault select grant'
+);
+
+update public.profiles
+set account_status = 'inactive'
+where id = '30000000-0000-4000-8000-000000000001';
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"30000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true
+);
+
+select throws_ok(
+  $$ select public.reveal_license_secret(
+    '34000000-0000-4000-8000-000000000001',
+    'license_key',
+    gen_random_uuid()
+  ) $$,
+  '42501', 'ACCESS_DENIED',
+  'inactive admin cannot reveal a license secret'
 );
 
 select * from finish();
