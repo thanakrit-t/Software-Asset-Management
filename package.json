@@ -14,7 +14,8 @@
     "db:reset": "supabase db reset --local",
     "db:test": "supabase test db --local",
     "db:lint": "supabase db lint --local --level warning --fail-on warning",
-    "db:types": "supabase gen types --lang typescript --local --schema public > src/lib/supabase/database.types.ts"
+    "db:types": "supabase gen types --lang typescript --local --schema public > src/lib/supabase/database.types.ts",
+    "db:verify": "npm run db:reset && npm run db:test && npm run db:lint && npm run db:types"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

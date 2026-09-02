@@ -1478,6 +1478,9 @@ export type Database = {
         Row: {
           delivered_at: string | null
           dismissed_at: string | null
+          id: string
+          is_dismissed: boolean
+          is_read: boolean
           notification_id: string
           profile_id: string
           read_at: string | null
@@ -1485,6 +1488,9 @@ export type Database = {
         Insert: {
           delivered_at?: string | null
           dismissed_at?: string | null
+          id?: string
+          is_dismissed?: boolean
+          is_read?: boolean
           notification_id: string
           profile_id: string
           read_at?: string | null
@@ -1492,6 +1498,9 @@ export type Database = {
         Update: {
           delivered_at?: string | null
           dismissed_at?: string | null
+          id?: string
+          is_dismissed?: boolean
+          is_read?: boolean
           notification_id?: string
           profile_id?: string
           read_at?: string | null
@@ -2729,9 +2738,12 @@ export type Database = {
           dismissed_at: string | null
           event_date: string | null
           id: string | null
+          is_dismissed: boolean | null
+          is_read: boolean | null
           message: string | null
           notification_type: string | null
           read_at: string | null
+          recipient_id: string | null
           resolved_at: string | null
           severity: string | null
           title: string | null
@@ -2772,6 +2784,244 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      archive_asset: {
+        Args: {
+          acknowledge_allocations: boolean
+          asset_id: string
+          expected_version: number
+          reason: string
+        }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          asset_code: string | null
+          asset_status_id: string
+          asset_type_id: string
+          computer_name: string | null
+          computer_name_duplicate_approved_at: string | null
+          computer_name_duplicate_approved_by: string | null
+          computer_name_duplicate_reason: string | null
+          created_at: string
+          created_by: string | null
+          department_id: string | null
+          id: string
+          internet_level_id: string | null
+          location_id: string | null
+          manufacturer: string | null
+          migration_batch_id: string | null
+          migration_reference: string | null
+          migration_source_row_id: string | null
+          model: string | null
+          operating_system_product_id: string | null
+          purchase_date: string | null
+          remark: string | null
+          risk_access_level: string | null
+          serial_number: string | null
+          site_id: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "assets"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      archive_license_entitlement: {
+        Args: {
+          entitlement_id: string
+          expected_version: number
+          reason: string
+        }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          contract_reference: string | null
+          created_at: string
+          created_by: string | null
+          end_date: string | null
+          id: string
+          invoice_reference: string | null
+          legacy_install_date: string | null
+          license_key_masked: string | null
+          license_metric_id: string
+          license_reference: string | null
+          migration_batch_id: string | null
+          migration_source_row_id: string | null
+          owned_quantity: number | null
+          owner_name: string | null
+          owner_person_id: string | null
+          po_reference: string | null
+          product_classification_id: string | null
+          purchase_date: string | null
+          purchase_form_id: string | null
+          record_status: Database["public"]["Enums"]["license_record_status"]
+          remark: string | null
+          scope_mode: Database["public"]["Enums"]["license_scope_mode"]
+          serial_number_masked: string | null
+          software_product_id: string
+          start_date: string | null
+          updated_at: string
+          updated_by: string | null
+          vendor_id: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "license_entitlements"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      archive_master_data: {
+        Args: {
+          entity_id: string
+          entity_type: string
+          expected_version: number
+          reason: string
+        }
+        Returns: Json
+      }
+      archive_software_product: {
+        Args: { expected_version: number; product_id: string; reason: string }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          category_id: string
+          created_at: string
+          created_by: string | null
+          end_of_life_date: string | null
+          id: string
+          name: string
+          publisher_id: string
+          remark: string | null
+          support_status: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+          version_edition: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "software_products"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_asset: {
+        Args: { payload: Json }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          asset_code: string | null
+          asset_status_id: string
+          asset_type_id: string
+          computer_name: string | null
+          computer_name_duplicate_approved_at: string | null
+          computer_name_duplicate_approved_by: string | null
+          computer_name_duplicate_reason: string | null
+          created_at: string
+          created_by: string | null
+          department_id: string | null
+          id: string
+          internet_level_id: string | null
+          location_id: string | null
+          manufacturer: string | null
+          migration_batch_id: string | null
+          migration_reference: string | null
+          migration_source_row_id: string | null
+          model: string | null
+          operating_system_product_id: string | null
+          purchase_date: string | null
+          remark: string | null
+          risk_access_level: string | null
+          serial_number: string | null
+          site_id: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "assets"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_license_entitlement: {
+        Args: { payload: Json; secret_payload: Json }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          contract_reference: string | null
+          created_at: string
+          created_by: string | null
+          end_date: string | null
+          id: string
+          invoice_reference: string | null
+          legacy_install_date: string | null
+          license_key_masked: string | null
+          license_metric_id: string
+          license_reference: string | null
+          migration_batch_id: string | null
+          migration_source_row_id: string | null
+          owned_quantity: number | null
+          owner_name: string | null
+          owner_person_id: string | null
+          po_reference: string | null
+          product_classification_id: string | null
+          purchase_date: string | null
+          purchase_form_id: string | null
+          record_status: Database["public"]["Enums"]["license_record_status"]
+          remark: string | null
+          scope_mode: Database["public"]["Enums"]["license_scope_mode"]
+          serial_number_masked: string | null
+          software_product_id: string
+          start_date: string | null
+          updated_at: string
+          updated_by: string | null
+          vendor_id: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "license_entitlements"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_software_product: {
+        Args: { payload: Json }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          category_id: string
+          created_at: string
+          created_by: string | null
+          end_of_life_date: string | null
+          id: string
+          name: string
+          publisher_id: string
+          remark: string | null
+          support_status: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+          version_edition: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "software_products"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      export_report: {
+        Args: { filters: Json; report_type: string }
+        Returns: Json[]
+      }
       release_license_allocation: {
         Args: {
           allocation_id: string
@@ -2804,6 +3054,90 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "license_allocations"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      reveal_license_secret: {
+        Args: {
+          correlation_id: string
+          entitlement_id: string
+          secret_type: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["license_secret_reveal"]
+        SetofOptions: {
+          from: "*"
+          to: "license_secret_reveal"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      rotate_license_secret: {
+        Args: {
+          entitlement_id: string
+          reason: string
+          secret_type: string
+          value: string
+        }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          contract_reference: string | null
+          created_at: string
+          created_by: string | null
+          end_date: string | null
+          id: string
+          invoice_reference: string | null
+          legacy_install_date: string | null
+          license_key_masked: string | null
+          license_metric_id: string
+          license_reference: string | null
+          migration_batch_id: string | null
+          migration_source_row_id: string | null
+          owned_quantity: number | null
+          owner_name: string | null
+          owner_person_id: string | null
+          po_reference: string | null
+          product_classification_id: string | null
+          purchase_date: string | null
+          purchase_form_id: string | null
+          record_status: Database["public"]["Enums"]["license_record_status"]
+          remark: string | null
+          scope_mode: Database["public"]["Enums"]["license_scope_mode"]
+          serial_number_masked: string | null
+          software_product_id: string
+          start_date: string | null
+          updated_at: string
+          updated_by: string | null
+          vendor_id: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "license_entitlements"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_notification_state: {
+        Args: {
+          recipient_id: string
+          requested_is_dismissed: boolean
+          requested_is_read: boolean
+        }
+        Returns: {
+          delivered_at: string | null
+          dismissed_at: string | null
+          id: string
+          is_dismissed: boolean
+          is_read: boolean
+          notification_id: string
+          profile_id: string
+          read_at: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "notification_recipients"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2872,6 +3206,153 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      update_asset: {
+        Args: { asset_id: string; expected_version: number; payload: Json }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          asset_code: string | null
+          asset_status_id: string
+          asset_type_id: string
+          computer_name: string | null
+          computer_name_duplicate_approved_at: string | null
+          computer_name_duplicate_approved_by: string | null
+          computer_name_duplicate_reason: string | null
+          created_at: string
+          created_by: string | null
+          department_id: string | null
+          id: string
+          internet_level_id: string | null
+          location_id: string | null
+          manufacturer: string | null
+          migration_batch_id: string | null
+          migration_reference: string | null
+          migration_source_row_id: string | null
+          model: string | null
+          operating_system_product_id: string | null
+          purchase_date: string | null
+          remark: string | null
+          risk_access_level: string | null
+          serial_number: string | null
+          site_id: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "assets"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_license_entitlement: {
+        Args: {
+          entitlement_id: string
+          expected_version: number
+          payload: Json
+        }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          contract_reference: string | null
+          created_at: string
+          created_by: string | null
+          end_date: string | null
+          id: string
+          invoice_reference: string | null
+          legacy_install_date: string | null
+          license_key_masked: string | null
+          license_metric_id: string
+          license_reference: string | null
+          migration_batch_id: string | null
+          migration_source_row_id: string | null
+          owned_quantity: number | null
+          owner_name: string | null
+          owner_person_id: string | null
+          po_reference: string | null
+          product_classification_id: string | null
+          purchase_date: string | null
+          purchase_form_id: string | null
+          record_status: Database["public"]["Enums"]["license_record_status"]
+          remark: string | null
+          scope_mode: Database["public"]["Enums"]["license_scope_mode"]
+          serial_number_masked: string | null
+          software_product_id: string
+          start_date: string | null
+          updated_at: string
+          updated_by: string | null
+          vendor_id: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "license_entitlements"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_master_data: {
+        Args: {
+          entity_id: string
+          entity_type: string
+          expected_version: number
+          payload: Json
+        }
+        Returns: Json
+      }
+      update_software_product: {
+        Args: { expected_version: number; payload: Json; product_id: string }
+        Returns: {
+          archived_at: string | null
+          archived_by: string | null
+          category_id: string
+          created_at: string
+          created_by: string | null
+          end_of_life_date: string | null
+          id: string
+          name: string
+          publisher_id: string
+          remark: string | null
+          support_status: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+          version_edition: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "software_products"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_system_settings: {
+        Args: { expected_version: number; payload: Json }
+        Returns: {
+          audit_retention_months: number
+          created_at: string
+          created_by: string | null
+          date_format: string
+          default_page_size: number
+          id: number
+          max_login_failures: number
+          organization_name: string
+          over_allocation_policy: string
+          secret_visible_suffix_length: number
+          session_timeout_minutes: number
+          timezone: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "system_settings"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       account_status: "active" | "inactive" | "locked"
@@ -2888,7 +3369,12 @@ export type Database = {
         | "mixed"
     }
     CompositeTypes: {
-      [_ in never]: never
+      license_secret_reveal: {
+        secret_type: string | null
+        secret_value: string | null
+        correlation_id: string | null
+        revealed_at: string | null
+      }
     }
   }
 }
