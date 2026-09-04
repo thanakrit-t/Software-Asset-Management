@@ -127,6 +127,9 @@ begin
   );
 
   return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'DUPLICATE_RECORD';
 end;
 $$;
 
@@ -326,6 +329,9 @@ begin
   );
 
   return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'DUPLICATE_RECORD';
 end;
 $$;
 
@@ -571,6 +577,9 @@ begin
   );
 
   return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'DUPLICATE_RECORD';
 end;
 $$;
 
@@ -632,6 +641,157 @@ begin
   );
 
   return result;
+end;
+$$;
+
+create or replace function public.allocate_license(payload jsonb)
+returns public.license_allocations
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  entitlement public.license_entitlements%rowtype;
+  metric public.license_metrics%rowtype;
+  result public.license_allocations%rowtype;
+  requested_target public.allocation_target_type;
+  requested_quantity integer;
+  target_site_id uuid;
+  active_quantity integer;
+  policy text;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  requested_target :=
+    (payload->>'target_type')::public.allocation_target_type;
+  requested_quantity := coalesce((payload->>'quantity')::integer, 1);
+
+  if requested_quantity <= 0 then
+    raise exception using errcode = '22023', message = 'INVALID_LICENSE_TARGET';
+  end if;
+
+  select *
+  into entitlement
+  from public.license_entitlements as license
+  where license.id = (payload->>'license_entitlement_id')::uuid
+  for update;
+
+  if not found
+    or entitlement.record_status <> 'active'
+    or entitlement.archived_at is not null then
+    raise exception using errcode = 'P0001', message = 'LICENSE_NOT_ACTIVE';
+  end if;
+
+  select *
+  into strict metric
+  from public.license_metrics as license_metric
+  where license_metric.id = entitlement.license_metric_id;
+
+  if (metric.target_mode = 'device' and requested_target <> 'asset')
+    or (metric.target_mode = 'named_user' and requested_target <> 'person')
+    or (metric.target_mode = 'site' and requested_target <> 'site') then
+    raise exception using errcode = '22023', message = 'INVALID_LICENSE_TARGET';
+  end if;
+
+  case requested_target
+    when 'asset' then
+      select asset.site_id
+      into target_site_id
+      from public.assets as asset
+      where asset.id = (payload->>'asset_id')::uuid
+        and asset.archived_at is null
+      for update;
+    when 'person' then
+      select person.primary_site_id
+      into target_site_id
+      from public.people as person
+      where person.id = (payload->>'person_id')::uuid
+        and person.archived_at is null;
+    when 'site' then
+      select site.id
+      into target_site_id
+      from public.sites as site
+      where site.id = (payload->>'site_id')::uuid
+        and site.archived_at is null
+        and site.is_active;
+  end case;
+
+  if target_site_id is null then
+    raise exception using errcode = '22023', message = 'INVALID_LICENSE_TARGET';
+  end if;
+
+  if entitlement.scope_mode = 'selected_sites'
+    and not exists (
+      select 1
+      from public.license_site_scopes as scope
+      where scope.license_entitlement_id = entitlement.id
+        and scope.site_id = target_site_id
+    ) then
+    raise exception using errcode = '22023', message = 'INVALID_SITE_SCOPE';
+  end if;
+
+  select coalesce(pg_catalog.sum(allocation.quantity), 0)::integer
+  into active_quantity
+  from public.license_allocations as allocation
+  where allocation.license_entitlement_id = entitlement.id
+    and allocation.allocation_status = 'active';
+
+  select settings.over_allocation_policy
+  into policy
+  from public.system_settings as settings
+  where settings.id = 1;
+
+  if entitlement.owned_quantity is not null
+    and active_quantity + requested_quantity > entitlement.owned_quantity
+    and not (
+      policy = 'allow_with_reason'
+      and coalesce((payload->>'override_used')::boolean, false)
+      and pg_catalog.btrim(coalesce(payload->>'override_reason', '')) <> ''
+    ) then
+    raise exception using errcode = 'P0001', message = 'INSUFFICIENT_LICENSE';
+  end if;
+
+  insert into public.license_allocations (
+    license_entitlement_id, target_type, asset_id, person_id, site_id,
+    quantity, allocated_at, installed_at, override_used, override_reason,
+    remark, created_by, updated_by
+  ) values (
+    entitlement.id,
+    requested_target,
+    (payload->>'asset_id')::uuid,
+    (payload->>'person_id')::uuid,
+    (payload->>'site_id')::uuid,
+    requested_quantity,
+    coalesce((payload->>'allocated_at')::date, current_date),
+    (payload->>'installed_at')::date,
+    coalesce((payload->>'override_used')::boolean, false),
+    payload->>'override_reason',
+    payload->>'remark',
+    auth.uid(),
+    auth.uid()
+  )
+  returning * into result;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, new_values, reason
+  ) values (
+    auth.uid(), 'user', 'allocate', 'license_allocation', result.id,
+    'License allocation created',
+    pg_catalog.jsonb_build_object(
+      'license_entitlement_id', entitlement.id,
+      'target_type', result.target_type,
+      'quantity', result.quantity
+    ),
+    result.override_reason
+  );
+
+  return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'ALLOCATION_DUPLICATE';
 end;
 $$;
 

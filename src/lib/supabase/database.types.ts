@@ -3120,11 +3120,7 @@ export type Database = {
         }
       }
       set_notification_state: {
-        Args: {
-          recipient_id: string
-          requested_is_dismissed: boolean
-          requested_is_read: boolean
-        }
+        Args: { is_dismissed: boolean; is_read: boolean; recipient_id: string }
         Returns: {
           delivered_at: string | null
           dismissed_at: string | null

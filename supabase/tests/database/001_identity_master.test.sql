@@ -1,6 +1,6 @@
 begin;
 
-select plan(41);
+select plan(67);
 
 select has_schema('private', 'private schema exists');
 select has_schema('audit', 'audit schema exists');
@@ -139,6 +139,37 @@ values (
   'Master Test'
 );
 
+insert into public.departments (id, code, name)
+values (
+  '18100000-0000-4000-8000-000000000001',
+  'DISPATCH_DEPARTMENT',
+  'Dispatcher Department'
+);
+
+insert into public.locations (id, site_id, code, name)
+values (
+  '18200000-0000-4000-8000-000000000001',
+  '01000000-0000-4000-8000-000000000002',
+  'DISPATCH_LOCATION',
+  'Dispatcher Location'
+);
+
+insert into public.publishers (id, code, name_th, name_en)
+values (
+  '18300000-0000-4000-8000-000000000001',
+  'DISPATCH_PUBLISHER',
+  'ผู้เผยแพร่ทดสอบ',
+  'Dispatcher Publisher'
+);
+
+insert into public.vendors (id, code, name_th, name_en)
+values (
+  '18400000-0000-4000-8000-000000000001',
+  'DISPATCH_VENDOR',
+  'ผู้ขายทดสอบ',
+  'Dispatcher Vendor'
+);
+
 update public.profiles
 set app_role = 'admin'
 where id = '10000000-0000-4000-8000-000000000001';
@@ -149,6 +180,66 @@ select set_config(
   '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}',
   true
 );
+
+select results_eq(
+  pg_catalog.format(
+    'select (public.update_master_data(%L, %L::uuid, 1, %L::jsonb)->>''sort_order'')::integer',
+    branch.entity_type,
+    branch.entity_id,
+    pg_catalog.jsonb_build_object('sort_order', branch.expected_sort)::text
+  ),
+  pg_catalog.format('values (%s::integer)', branch.expected_sort),
+  pg_catalog.format(
+    'update_master_data dispatches the %s branch with literal behavior',
+    branch.entity_type
+  )
+)
+from (
+  values
+    ('site', '01000000-0000-4000-8000-000000000001', 101),
+    ('department', '18100000-0000-4000-8000-000000000001', 102),
+    ('location', '18200000-0000-4000-8000-000000000001', 103),
+    ('asset_type', '10000000-0000-4000-8000-000000000001', 104),
+    ('asset_status', '11000000-0000-4000-8000-000000000001', 105),
+    ('internet_level', '12000000-0000-4000-8000-000000000001', 106),
+    ('software_category', '13000000-0000-4000-8000-000000000001', 107),
+    ('license_metric', '14000000-0000-4000-8000-000000000001', 108),
+    ('product_classification', '15000000-0000-4000-8000-000000000001', 109),
+    ('purchase_form', '16000000-0000-4000-8000-000000000001', 110),
+    ('expiration_threshold', '17000000-0000-4000-8000-000000000001', 111),
+    ('publisher', '18300000-0000-4000-8000-000000000001', 112),
+    ('vendor', '18400000-0000-4000-8000-000000000001', 113)
+) as branch(entity_type, entity_id, expected_sort);
+
+select results_eq(
+  pg_catalog.format(
+    'select (archived->>''is_active'')::boolean, archived->>''archived_at'' is not null from (select public.archive_master_data(%L, %L::uuid, 2, %L) as archived) as result',
+    branch.entity_type,
+    branch.entity_id,
+    'Dispatcher smoke archive'
+  ),
+  $$ values (false, true) $$,
+  pg_catalog.format(
+    'archive_master_data dispatches the %s branch with literal behavior',
+    branch.entity_type
+  )
+)
+from (
+  values
+    ('site', '01000000-0000-4000-8000-000000000001'),
+    ('department', '18100000-0000-4000-8000-000000000001'),
+    ('location', '18200000-0000-4000-8000-000000000001'),
+    ('asset_type', '10000000-0000-4000-8000-000000000001'),
+    ('asset_status', '11000000-0000-4000-8000-000000000001'),
+    ('internet_level', '12000000-0000-4000-8000-000000000001'),
+    ('software_category', '13000000-0000-4000-8000-000000000001'),
+    ('license_metric', '14000000-0000-4000-8000-000000000001'),
+    ('product_classification', '15000000-0000-4000-8000-000000000001'),
+    ('purchase_form', '16000000-0000-4000-8000-000000000001'),
+    ('expiration_threshold', '17000000-0000-4000-8000-000000000001'),
+    ('publisher', '18300000-0000-4000-8000-000000000001'),
+    ('vendor', '18400000-0000-4000-8000-000000000001')
+) as branch(entity_type, entity_id);
 
 select lives_ok(
   $$

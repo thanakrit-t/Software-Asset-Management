@@ -107,6 +107,17 @@ begin
 end;
 $$;
 
+create or replace function private.lock_license_plaintext_boundary()
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  select pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('sam:license-plaintext-boundary', 0)
+  );
+$$;
+
 create or replace function public.update_license_entitlement(
   entitlement_id uuid,
   expected_version integer,
@@ -131,6 +142,12 @@ declare
   active_quantity integer;
   transition_reason text;
 begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  perform private.lock_license_plaintext_boundary();
+
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
@@ -421,6 +438,9 @@ begin
   );
 
   return result;
+exception
+  when unique_violation then
+    raise exception using errcode = '23505', message = 'DUPLICATE_RECORD';
 end;
 $$;
 
@@ -439,6 +459,12 @@ declare
   result public.license_entitlements%rowtype;
   active_quantity integer;
 begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  perform private.lock_license_plaintext_boundary();
+
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
@@ -575,7 +601,43 @@ declare
   license_key_candidate_fingerprint bytea;
   serial_candidate_fingerprint bytea;
 begin
-  foreach candidate_value in array coalesce(candidates, array[]::text[])
+  for candidate_value in
+    select supplied.value
+    from pg_catalog.unnest(
+      coalesce(candidates, array[]::text[])
+    ) as supplied(value)
+    union all
+    select reserved.value
+    from public.license_entitlements as entitlement
+    cross join lateral (
+      values
+        (entitlement.license_reference),
+        (entitlement.invoice_reference),
+        (entitlement.po_reference),
+        (entitlement.contract_reference),
+        (entitlement.owner_name),
+        (entitlement.remark)
+    ) as reserved(value)
+    union all
+    select historical.value
+    from audit.audit_events as event
+    cross join lateral (
+      values
+        (event.old_values->>'license_reference'),
+        (event.old_values->>'invoice_reference'),
+        (event.old_values->>'po_reference'),
+        (event.old_values->>'contract_reference'),
+        (event.old_values->>'owner_name'),
+        (event.old_values->>'remark'),
+        (event.new_values->>'license_reference'),
+        (event.new_values->>'invoice_reference'),
+        (event.new_values->>'po_reference'),
+        (event.new_values->>'contract_reference'),
+        (event.new_values->>'owner_name'),
+        (event.new_values->>'remark'),
+        (event.reason)
+    ) as historical(value)
+    where event.entity_type = 'license_entitlement'
   loop
     license_key_candidate_fingerprint := null;
     serial_candidate_fingerprint := null;
@@ -687,6 +749,12 @@ declare
   serial_vault_id uuid;
   result public.license_entitlements%rowtype;
 begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  perform private.lock_license_plaintext_boundary();
+
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
@@ -976,6 +1044,12 @@ declare
   new_fingerprint bytea;
   new_mask text;
 begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  perform private.lock_license_plaintext_boundary();
+
   if not private.is_admin() then
     raise exception using errcode = '42501', message = 'ACCESS_DENIED';
   end if;
@@ -1494,8 +1568,8 @@ $$;
 
 create or replace function public.set_notification_state(
   recipient_id uuid,
-  requested_is_read boolean,
-  requested_is_dismissed boolean
+  is_read boolean,
+  is_dismissed boolean
 )
 returns public.notification_recipients
 language plpgsql
@@ -1522,14 +1596,14 @@ begin
   end if;
 
   update public.notification_recipients
-  set is_read = requested_is_read,
+  set is_read = set_notification_state.is_read,
       read_at = case
-        when requested_is_read then pg_catalog.now()
+        when set_notification_state.is_read then pg_catalog.now()
         else null
       end,
-      is_dismissed = requested_is_dismissed,
+      is_dismissed = set_notification_state.is_dismissed,
       dismissed_at = case
-        when requested_is_dismissed then pg_catalog.now()
+        when set_notification_state.is_dismissed then pg_catalog.now()
         else null
       end
   where id = recipient_id
@@ -1956,7 +2030,158 @@ begin
 end;
 $$;
 
+create or replace function public.set_user_role(
+  profile_id uuid,
+  new_role public.app_role,
+  reason text
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  existing public.profiles%rowtype;
+  result public.profiles%rowtype;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  if pg_catalog.btrim(coalesce(reason, '')) = '' then
+    raise exception using errcode = '22023', message = 'OVERRIDE_REASON_REQUIRED';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('sam:last-active-admin', 0)
+  );
+
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  select *
+  into existing
+  from public.profiles as profile
+  where profile.id = set_user_role.profile_id
+  for update;
+
+  if existing.app_role = 'admin'
+    and set_user_role.new_role <> 'admin'
+    and (
+      select count(*)
+      from public.profiles as profile
+      where profile.app_role = 'admin'
+        and profile.account_status = 'active'
+    ) <= 1 then
+    raise exception using errcode = 'P0001', message = 'LAST_ADMIN_PROTECTED';
+  end if;
+
+  update public.profiles
+  set app_role = set_user_role.new_role,
+      updated_by = auth.uid()
+  where id = set_user_role.profile_id
+  returning * into result;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, old_values, new_values, reason
+  ) values (
+    auth.uid(), 'user', 'role_change', 'profile', result.id,
+    'User role changed',
+    pg_catalog.jsonb_build_object('app_role', existing.app_role),
+    pg_catalog.jsonb_build_object('app_role', result.app_role),
+    pg_catalog.btrim(set_user_role.reason)
+  );
+
+  return result;
+end;
+$$;
+
+create or replace function public.set_user_status(
+  profile_id uuid,
+  new_status public.account_status,
+  reason text
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  existing public.profiles%rowtype;
+  result public.profiles%rowtype;
+begin
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  if pg_catalog.btrim(coalesce(reason, '')) = '' then
+    raise exception using errcode = '22023', message = 'OVERRIDE_REASON_REQUIRED';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('sam:last-active-admin', 0)
+  );
+
+  if not private.is_admin() then
+    raise exception using errcode = '42501', message = 'ACCESS_DENIED';
+  end if;
+
+  select *
+  into existing
+  from public.profiles as profile
+  where profile.id = set_user_status.profile_id
+  for update;
+
+  if existing.app_role = 'admin'
+    and existing.account_status = 'active'
+    and set_user_status.new_status <> 'active'
+    and (
+      select count(*)
+      from public.profiles as profile
+      where profile.app_role = 'admin'
+        and profile.account_status = 'active'
+    ) <= 1 then
+    raise exception using errcode = 'P0001', message = 'LAST_ADMIN_PROTECTED';
+  end if;
+
+  update public.profiles
+  set account_status = set_user_status.new_status,
+      deactivated_at = case
+        when set_user_status.new_status = 'inactive' then pg_catalog.now()
+        else null
+      end,
+      deactivated_by = case
+        when set_user_status.new_status = 'inactive' then auth.uid()
+        else null
+      end,
+      updated_by = auth.uid()
+  where id = set_user_status.profile_id
+  returning * into result;
+
+  insert into audit.audit_events (
+    actor_profile_id, actor_type, action, entity_type, entity_id,
+    description, old_values, new_values, reason
+  ) values (
+    auth.uid(), 'user', 'status_change', 'profile', result.id,
+    'User account status changed',
+    pg_catalog.jsonb_build_object(
+      'account_status', existing.account_status
+    ),
+    pg_catalog.jsonb_build_object(
+      'account_status', result.account_status
+    ),
+    pg_catalog.btrim(set_user_status.reason)
+  );
+
+  return result;
+end;
+$$;
+
 revoke all on function private.jsonb_has_only_keys(jsonb, text[])
+from public, anon, authenticated;
+revoke all on function private.lock_license_plaintext_boundary()
 from public, anon, authenticated;
 revoke all on function private.normalize_license_secret(text, text)
 from public, anon, authenticated;
@@ -2016,6 +2241,14 @@ to authenticated;
 grant execute on function public.update_system_settings(integer, jsonb)
 to authenticated;
 grant execute on function public.export_report(text, jsonb)
+to authenticated;
+revoke all on function public.set_user_role(uuid, public.app_role, text)
+from public, anon, authenticated;
+revoke all on function public.set_user_status(uuid, public.account_status, text)
+from public, anon, authenticated;
+grant execute on function public.set_user_role(uuid, public.app_role, text)
+to authenticated;
+grant execute on function public.set_user_status(uuid, public.account_status, text)
 to authenticated;
 
 revoke insert, update, delete, truncate, references, trigger

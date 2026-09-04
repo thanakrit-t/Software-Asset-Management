@@ -1,6 +1,6 @@
 begin;
 
-select plan(131);
+select plan(155);
 
 select has_table('public', 'publishers', 'publishers table exists');
 select has_table('public', 'software_products', 'software products table exists');
@@ -204,16 +204,40 @@ values (
 
 insert into public.license_entitlements (
   id, license_reference, software_product_id, license_metric_id,
-  owned_quantity, record_status, scope_mode
+  owned_quantity, record_status, scope_mode, owner_name
+)
+values
+  (
+    '23000000-0000-4000-8000-000000000003',
+    'ARCHIVE-LICENSE',
+    '21000000-0000-4000-8000-000000000001',
+    '14000000-0000-4000-8000-000000000001',
+    1,
+    'active',
+    'all_sites',
+    null
+  ),
+  (
+    '23000000-0000-4000-8000-000000000004',
+    'CROSS-ENTITLEMENT-CARRIER',
+    '21000000-0000-4000-8000-000000000001',
+    '14000000-0000-4000-8000-000000000001',
+    1,
+    'active',
+    'all_sites',
+    'CROSS-ENTITLEMENT-RESERVED'
+  );
+
+insert into audit.audit_events (
+  actor_type, action, entity_type, entity_id, description, new_values
 )
 values (
-  '23000000-0000-4000-8000-000000000003',
-  'ARCHIVE-LICENSE',
-  '21000000-0000-4000-8000-000000000001',
-  '14000000-0000-4000-8000-000000000001',
-  1,
-  'active',
-  'all_sites'
+  'migration',
+  'update',
+  'license_entitlement',
+  '23000000-0000-4000-8000-000000000004',
+  'Historical License snapshot fixture',
+  pg_catalog.jsonb_build_object('remark', 'HISTORY-ONLY-RESERVED')
 );
 
 select is(
@@ -407,6 +431,22 @@ select is(
   'create_asset persists the active asset'
 );
 
+select throws_ok(
+  $$
+    select public.create_asset(
+      jsonb_build_object(
+        'asset_code', 'tdd-created-asset',
+        'computer_name', 'TDD-DUPLICATE-CREATE-PC',
+        'asset_type_id', '10000000-0000-4000-8000-000000000001',
+        'asset_status_id', '11000000-0000-4000-8000-000000000001',
+        'site_id', '01000000-0000-4000-8000-000000000001'
+      )
+    )
+  $$,
+  '23505', 'DUPLICATE_RECORD',
+  'asset create maps an exact unique-index conflict to DUPLICATE_RECORD'
+);
+
 select is(
   (
     select count(*)::integer
@@ -428,6 +468,16 @@ select lives_ok(
     jsonb_build_object('computer_name', 'TDD-PC-UPDATED')
   ) $$,
   'admin updates an asset with the expected version'
+);
+
+select throws_ok(
+  $$ select public.update_asset(
+    current_setting('test.asset_id')::uuid,
+    2,
+    jsonb_build_object('asset_code', 'TDD-CREATED-ASSET')
+  ) $$,
+  '23505', 'DUPLICATE_RECORD',
+  'asset update maps an exact unique-index conflict to DUPLICATE_RECORD'
 );
 
 select throws_ok(
@@ -668,6 +718,19 @@ select lives_ok(
 );
 
 select throws_ok(
+  $$ select public.update_software_product(
+    current_setting('test.product_id')::uuid,
+    2,
+    jsonb_build_object(
+      'name', 'TDD Created Product',
+      'version_edition', '1'
+    )
+  ) $$,
+  '23505', 'DUPLICATE_RECORD',
+  'software update maps an exact business-key conflict to DUPLICATE_RECORD'
+);
+
+select throws_ok(
   $$
     select public.update_software_product(
       current_setting('test.product_id')::uuid,
@@ -878,13 +941,491 @@ select is(
 );
 
 reset role;
+create extension if not exists dblink with schema extensions;
+
+do $concurrency_pepper$
+begin
+  perform extensions.dblink_connect(
+    'concurrency_pepper_fixture',
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
+  );
+  perform extensions.dblink_exec(
+    'concurrency_pepper_fixture',
+    $remote$
+      do $$
+      begin
+        if not exists (
+          select 1
+          from vault.decrypted_secrets
+          where name = 'sam_license_fingerprint_pepper'
+        ) then
+          perform vault.create_secret(
+            'TDD-ONLY-CONCURRENCY-PEPPER',
+            'sam_license_fingerprint_pepper',
+            'Disposable local concurrency pepper'
+          );
+        end if;
+      end;
+      $$
+    $remote$
+  );
+  perform extensions.dblink_disconnect('concurrency_pepper_fixture');
+end;
+$concurrency_pepper$;
+
+-- Establish committed fixtures before this transaction's first successful
+-- License mutation retains the transaction-level plaintext boundary lock.
+create or replace function private.test_open_concurrent_session(
+  connection_name text,
+  actor_id uuid
+)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  perform extensions.dblink_connect(
+    connection_name,
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
+  );
+  perform extensions.dblink_exec(connection_name, 'begin');
+  perform extensions.dblink_exec(
+    connection_name,
+    'set local statement_timeout = ''10s'''
+  );
+  perform extensions.dblink_exec(
+    connection_name,
+    'set local idle_in_transaction_session_timeout = ''10s'''
+  );
+  perform extensions.dblink_exec(
+    connection_name,
+    pg_catalog.format(
+      'set local "request.jwt.claims" = %L',
+      pg_catalog.jsonb_build_object(
+        'sub', actor_id,
+        'role', 'authenticated'
+      )::text
+    )
+  );
+  perform extensions.dblink_exec(
+    connection_name,
+    'set local role authenticated'
+  );
+end;
+$$;
+
+create or replace function private.test_backend_reaches_wait(
+  backend_pid integer,
+  expected_event text,
+  expected_event_type text
+)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+declare
+  attempt integer;
+  observed boolean;
+begin
+  for attempt in 1..40 loop
+    perform pg_catalog.pg_stat_clear_snapshot();
+
+    select exists (
+      select 1
+      from pg_catalog.pg_stat_activity as activity
+      where activity.pid = test_backend_reaches_wait.backend_pid
+        and (
+          test_backend_reaches_wait.expected_event is null
+          or activity.wait_event =
+            test_backend_reaches_wait.expected_event
+        )
+        and (
+          test_backend_reaches_wait.expected_event_type is null
+          or activity.wait_event_type =
+            test_backend_reaches_wait.expected_event_type
+        )
+    )
+    into observed;
+
+    if observed then
+      return true;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_catalog.pg_stat_activity as activity
+      where activity.pid = test_backend_reaches_wait.backend_pid
+    ) then
+      return false;
+    end if;
+
+    perform pg_catalog.pg_sleep(0.05);
+  end loop;
+
+  return false;
+end;
+$$;
+
+select set_config(
+  'test.concurrent_admin_a',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_admin_b',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_publisher_id',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_product_id',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_asset_id',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_asset_license_id',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_license_a',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_license_b',
+  extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_reserved_value',
+  'CONCURRENT-RESERVED-' || extensions.gen_random_uuid()::text,
+  true
+);
+select set_config(
+  'test.concurrent_original_secret',
+  'CONCURRENT-ORIGINAL-' || extensions.gen_random_uuid()::text,
+  true
+);
+do $fixture$
+declare
+  connection_string constant text :=
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres';
+begin
+  perform extensions.dblink_connect('concurrency_fixture', connection_string);
+
+  -- dblink fixtures commit outside pgTAP's rollback. Neutralize actors from a
+  -- prior focused run so the global last-Admin invariant remains repeatable.
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    $remote$
+      update public.profiles
+      set app_role = 'user'::public.app_role,
+          account_status = 'inactive'::public.account_status,
+          deactivated_at = pg_catalog.now(),
+          deactivated_by = null
+      where email like 'concurrency-%@test.local'
+    $remote$
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      $remote$
+        insert into auth.users (
+          id, instance_id, aud, role, email, encrypted_password,
+          email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+          created_at, updated_at, confirmation_token, email_change,
+          email_change_token_new, recovery_token
+        ) values
+          (
+            %L::uuid, '00000000-0000-0000-0000-000000000000'::uuid,
+            'authenticated', 'authenticated', %L, '', pg_catalog.now(),
+            '{"provider":"email","providers":["email"]}'::jsonb,
+            '{}'::jsonb, pg_catalog.now(), pg_catalog.now(), '', '', '', ''
+          ),
+          (
+            %L::uuid, '00000000-0000-0000-0000-000000000000'::uuid,
+            'authenticated', 'authenticated', %L, '', pg_catalog.now(),
+            '{"provider":"email","providers":["email"]}'::jsonb,
+            '{}'::jsonb, pg_catalog.now(), pg_catalog.now(), '', '', '', ''
+          )
+      $remote$,
+      current_setting('test.concurrent_admin_a'),
+      'concurrency-' || current_setting('test.concurrent_admin_a') || '@test.local',
+      current_setting('test.concurrent_admin_b'),
+      'concurrency-' || current_setting('test.concurrent_admin_b') || '@test.local'
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      'update public.profiles set app_role = ''admin'' where id in (%L::uuid, %L::uuid)',
+      current_setting('test.concurrent_admin_a'),
+      current_setting('test.concurrent_admin_b')
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      'insert into public.publishers (id, code, name_th) values (%L::uuid, %L, %L)',
+      current_setting('test.concurrent_publisher_id'),
+      'CONCURRENT_' || pg_catalog.replace(
+        current_setting('test.concurrent_publisher_id'), '-', ''
+      ),
+      'Concurrency Publisher'
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      $remote$
+        insert into public.software_products (
+          id, publisher_id, category_id, name, version_edition,
+          support_status
+        ) values (
+          %L::uuid, %L::uuid,
+          '13000000-0000-4000-8000-000000000001'::uuid,
+          %L, '1', 'supported'
+        )
+      $remote$,
+      current_setting('test.concurrent_product_id'),
+      current_setting('test.concurrent_publisher_id'),
+      'Concurrency Product ' || current_setting('test.concurrent_product_id')
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      $remote$
+        insert into public.assets (
+          id, asset_code, computer_name, asset_type_id,
+          asset_status_id, site_id
+        ) values (
+          %L::uuid, %L, %L,
+          '10000000-0000-4000-8000-000000000001'::uuid,
+          '11000000-0000-4000-8000-000000000001'::uuid,
+          '01000000-0000-4000-8000-000000000001'::uuid
+        )
+      $remote$,
+      current_setting('test.concurrent_asset_id'),
+      'CONCURRENT-ASSET-' || current_setting('test.concurrent_asset_id'),
+      'CONCURRENT-PC-' || current_setting('test.concurrent_asset_id')
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      $remote$
+        insert into public.license_entitlements (
+          id, license_reference, software_product_id, license_metric_id,
+          owned_quantity, record_status, scope_mode
+        ) values
+          (
+            %L::uuid, %L, %L::uuid,
+            '14000000-0000-4000-8000-000000000001'::uuid,
+            1, 'active', 'all_sites'
+          ),
+          (
+            %L::uuid, %L, %L::uuid,
+            '14000000-0000-4000-8000-000000000001'::uuid,
+            1, 'active', 'all_sites'
+          ),
+          (
+            %L::uuid, %L, %L::uuid,
+            '14000000-0000-4000-8000-000000000001'::uuid,
+            1, 'active', 'all_sites'
+          )
+      $remote$,
+      current_setting('test.concurrent_asset_license_id'),
+      'CONCURRENT-ASSET-LICENSE-' || current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_product_id'),
+      current_setting('test.concurrent_license_a'),
+      'CONCURRENT-LICENSE-A-' || current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_product_id'),
+      current_setting('test.concurrent_license_b'),
+      'CONCURRENT-LICENSE-B-' || current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_product_id')
+    )
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    $remote$
+      do $$
+      begin
+        if not exists (
+          select 1
+          from vault.decrypted_secrets
+          where name = 'sam_license_fingerprint_pepper'
+        ) then
+          perform vault.create_secret(
+            'TDD-ONLY-CONCURRENCY-PEPPER',
+            'sam_license_fingerprint_pepper',
+            'Disposable local concurrency pepper'
+          );
+        end if;
+      end;
+      $$
+    $remote$
+  );
+
+  perform extensions.dblink_exec(
+    'concurrency_fixture',
+    pg_catalog.format(
+      $remote$
+        with created_secret as (
+          select vault.create_secret(%L, %L, 'Concurrency test key') as id
+        )
+        insert into private.license_secrets (
+          license_entitlement_id, license_key_vault_secret_id,
+          license_key_fingerprint
+        )
+        select
+          %L::uuid,
+          created_secret.id,
+          private.fingerprint_license_secret('license_key', %L)
+        from created_secret
+      $remote$,
+      current_setting('test.concurrent_original_secret'),
+      'sam_license_' || current_setting('test.concurrent_license_b') || '_license_key',
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_original_secret')
+    )
+  );
+
+  perform extensions.dblink_disconnect('concurrency_fixture');
+end;
+$fixture$;
+-- Run the License inverse-write schedule before this pgTAP transaction can
+-- retain the production transaction-level boundary from ordinary test calls.
+select private.test_open_concurrent_session(
+  'license_ordinary_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+select private.test_open_concurrent_session(
+  'license_secret_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+
+select set_config(
+  'test.license_secret_backend_pid',
+  (
+    select response.backend_pid::text
+    from extensions.dblink(
+      'license_secret_session',
+      'select pg_catalog.pg_backend_pid()'
+    ) as response(backend_pid integer)
+  ),
+  true
+);
+
+select is(
+  (
+    select response.entitlement_id
+    from extensions.dblink(
+      'license_ordinary_session',
+      pg_catalog.format(
+        'select (public.update_license_entitlement(%L::uuid, 1, %L::jsonb)).id::text',
+        current_setting('test.concurrent_license_a'),
+        pg_catalog.jsonb_build_object(
+          'remark', current_setting('test.concurrent_reserved_value')
+        )::text
+      )
+    )
+      as response(entitlement_id text)
+  ),
+  current_setting('test.concurrent_license_a'),
+  'ordinary License write completes while its transaction stays open'
+);
+
+select extensions.dblink_send_query(
+  'license_secret_session',
+  pg_catalog.format(
+    'select (public.rotate_license_secret(%L::uuid, ''license_key'', %L, %L)).id::text',
+    current_setting('test.concurrent_license_b'),
+    current_setting('test.concurrent_reserved_value'),
+    'Concurrent collision attempt'
+  )
+);
+select pg_catalog.pg_sleep(0.25);
+
+select ok(
+  private.test_backend_reaches_wait(
+    current_setting('test.license_secret_backend_pid')::integer,
+    'advisory',
+    'Lock'
+  ),
+  'ordinary and secret License writes wait on the shared transaction advisory lock'
+);
+
+select extensions.dblink_exec('license_ordinary_session', 'commit');
+
+select is(
+  (
+    select count(*)
+    from extensions.dblink_get_result('license_secret_session', false)
+      as response(entitlement_id text)
+  ),
+  0::bigint,
+  'waiting secret rotation rechecks global plaintext after ordinary commit'
+);
+
+select count(*)
+from extensions.dblink_get_result('license_secret_session', false)
+  as response(entitlement_id text);
+
+select extensions.dblink_exec('license_secret_session', 'commit', false);
+
+select is(
+  (
+    select count(*)
+    from public.license_entitlements as entitlement
+    join private.license_secrets as secret
+      on secret.license_entitlement_id =
+        current_setting('test.concurrent_license_b')::uuid
+    where entitlement.id = current_setting('test.concurrent_license_a')::uuid
+      and entitlement.remark = current_setting('test.concurrent_reserved_value')
+      and secret.license_key_fingerprint =
+        private.fingerprint_license_secret(
+          'license_key',
+          current_setting('test.concurrent_reserved_value')
+        )
+  ),
+  0::bigint,
+  'concurrent inverse writes cannot commit a global secret/plaintext collision'
+);
+
+select extensions.dblink_disconnect('license_ordinary_session');
+select extensions.dblink_disconnect('license_secret_session');
+
 do $$
 begin
-  perform vault.create_secret(
-    'TDD-ONLY-FINGERPRINT-PEPPER',
-    'sam_license_fingerprint_pepper',
-    'Disposable pgTAP pepper'
-  );
+  if not exists (
+    select 1
+    from vault.decrypted_secrets
+    where name = 'sam_license_fingerprint_pepper'
+  ) then
+    perform vault.create_secret(
+      'TDD-ONLY-FINGERPRINT-PEPPER',
+      'sam_license_fingerprint_pepper',
+      'Disposable pgTAP pepper'
+    );
+  end if;
 end;
 $$;
 
@@ -1067,6 +1608,16 @@ select is(
   'ordinary license view exposes no plaintext, Vault UUID, or fingerprint'
 );
 
+select throws_ok(
+  $$ select public.update_license_entitlement(
+    '23000000-0000-4000-8000-000000000001',
+    1,
+    jsonb_build_object('license_reference', 'archive-license')
+  ) $$,
+  '23505', 'DUPLICATE_RECORD',
+  'license update maps an exact reference conflict to DUPLICATE_RECORD'
+);
+
 savepoint update_secret_collision_raw;
 select throws_ok(
   $$ select public.update_license_entitlement(
@@ -1163,6 +1714,32 @@ select is(
   true,
   'license inventory export exposes no plaintext, Vault UUID, or fingerprint'
 );
+
+savepoint rotate_cross_entitlement_collision;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'CROSS-ENTITLEMENT-RESERVED',
+    'Cross-entitlement collision test'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects plaintext reserved by another entitlement'
+);
+rollback to savepoint rotate_cross_entitlement_collision;
+
+savepoint rotate_historical_audit_collision;
+select throws_ok(
+  $$ select public.rotate_license_secret(
+    current_setting('test.created_license_id')::uuid,
+    'license_key',
+    'HISTORY-ONLY-RESERVED',
+    'Historical collision test'
+  ) $$,
+  'P0001', 'LICENSE_SECRET_COLLISION',
+  'secret rotation rejects plaintext reserved only by immutable License audit history'
+);
+rollback to savepoint rotate_historical_audit_collision;
 
 savepoint rotate_existing_field_collision_raw;
 select throws_ok(
@@ -1515,16 +2092,14 @@ select set_config(
   true
 );
 
-select is(
-  (
-    select is_read
-    from public.set_notification_state(
-      current_setting('test.notification_id')::uuid,
-      true,
-      false
+select lives_ok(
+  $$
+    select public.set_notification_state(
+      recipient_id => current_setting('test.notification_id')::uuid,
+      is_read => true,
+      is_dismissed => false
     )
-  ),
-  true,
+  $$,
   'recipient marks own notification read'
 );
 
@@ -1616,7 +2191,256 @@ select throws_ok(
   'report export rejects non-allowlisted filters'
 );
 
+select is(
+  (
+    select count(*)
+    from public.export_report(branch.report_type, branch.filters)
+  ),
+  0::bigint,
+  pg_catalog.format(
+    'export_report dispatches the %s allowlist branch with literal filtering',
+    branch.report_type
+  )
+)
+from (
+  values
+    (
+      'asset_inventory',
+      '{"site_id":"00000000-0000-4000-8000-000000000099"}'::jsonb
+    ),
+    (
+      'license_inventory',
+      '{"software_product_id":"00000000-0000-4000-8000-000000000099"}'::jsonb
+    ),
+    (
+      'license_compliance',
+      '{"software_product_id":"00000000-0000-4000-8000-000000000099"}'::jsonb
+    ),
+    ('license_expiry', '{"end_date_from":"9999-01-01"}'::jsonb),
+    (
+      'active_allocations',
+      '{"license_entitlement_id":"00000000-0000-4000-8000-000000000099"}'::jsonb
+    ),
+    ('data_quality', '{"entity_type":"__NO_MATCH__"}'::jsonb)
+) as branch(report_type, filters);
+
 reset role;
+select private.test_open_concurrent_session(
+  'admin_role_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+select private.test_open_concurrent_session(
+  'admin_status_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+
+select set_config(
+  'test.admin_status_backend_pid',
+  (
+    select response.backend_pid::text
+    from extensions.dblink(
+      'admin_status_session',
+      'select pg_catalog.pg_backend_pid()'
+    ) as response(backend_pid integer)
+  ),
+  true
+);
+
+select is(
+  (
+    select response.profile_id
+    from extensions.dblink(
+      'admin_role_session',
+      pg_catalog.format(
+        'select (public.set_user_role(%L::uuid, ''user''::public.app_role, %L)).id::text',
+        current_setting('test.concurrent_admin_b'),
+        'Concurrent role change'
+      )
+    )
+      as response(profile_id text)
+  ),
+  current_setting('test.concurrent_admin_b'),
+  'first last-admin mutation completes while its transaction stays open'
+);
+
+select extensions.dblink_send_query(
+  'admin_status_session',
+  pg_catalog.format(
+    'select (public.set_user_status(%L::uuid, ''inactive''::public.account_status, %L)).id::text',
+    current_setting('test.concurrent_admin_a'),
+    'Concurrent status change'
+  )
+);
+select pg_catalog.pg_sleep(0.25);
+
+select ok(
+  private.test_backend_reaches_wait(
+    current_setting('test.admin_status_backend_pid')::integer,
+    'advisory',
+    'Lock'
+  ),
+  'role and status mutations wait on the shared transaction advisory lock'
+);
+
+select extensions.dblink_exec('admin_role_session', 'commit');
+
+select is(
+  (
+    select count(*)
+    from extensions.dblink_get_result('admin_status_session', false)
+      as response(profile_id text)
+  ),
+  0::bigint,
+  'waiting last-admin mutation rechecks and rejects after the first commits'
+);
+
+select count(*)
+from extensions.dblink_get_result('admin_status_session', false)
+  as response(profile_id text);
+
+select extensions.dblink_exec('admin_status_session', 'commit', false);
+
+select is(
+  (
+    select count(*)
+    from public.profiles
+    where id in (
+        current_setting('test.concurrent_admin_a')::uuid,
+        current_setting('test.concurrent_admin_b')::uuid
+      )
+      and app_role = 'admin'
+      and account_status = 'active'
+  ),
+  1::bigint,
+  'concurrent role and status changes preserve one active Admin'
+);
+
+select extensions.dblink_disconnect('admin_role_session');
+select extensions.dblink_disconnect('admin_status_session');
+
+-- Restore the fixture actor only after asserting the unsafe old interleaving.
+-- Later schedules exercise independent locking boundaries with an active Admin.
+do $admin_fixture_repair$
+begin
+  perform extensions.dblink_connect(
+    'admin_fixture_repair',
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
+  );
+  perform extensions.dblink_exec(
+    'admin_fixture_repair',
+    pg_catalog.format(
+      $remote$
+        update public.profiles
+        set app_role = 'admin'::public.app_role,
+            account_status = 'active'::public.account_status,
+            deactivated_at = null,
+            deactivated_by = null
+        where id = %L::uuid
+      $remote$,
+      current_setting('test.concurrent_admin_a')
+    )
+  );
+  perform extensions.dblink_disconnect('admin_fixture_repair');
+end;
+$admin_fixture_repair$;
+
+select private.test_open_concurrent_session(
+  'asset_archive_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+select private.test_open_concurrent_session(
+  'asset_allocate_session',
+  current_setting('test.concurrent_admin_a')::uuid
+);
+
+select set_config(
+  'test.asset_allocate_backend_pid',
+  (
+    select response.backend_pid::text
+    from extensions.dblink(
+      'asset_allocate_session',
+      'select pg_catalog.pg_backend_pid()'
+    ) as response(backend_pid integer)
+  ),
+  true
+);
+
+select is(
+  (
+    select response.asset_id
+    from extensions.dblink(
+      'asset_archive_session',
+      pg_catalog.format(
+        'select (public.archive_asset(%L::uuid, 1, %L, true)).id::text',
+        current_setting('test.concurrent_asset_id'),
+        'Concurrent asset archive'
+      )
+    )
+      as response(asset_id text)
+  ),
+  current_setting('test.concurrent_asset_id'),
+  'asset archive completes eligibility check while its transaction stays open'
+);
+
+select extensions.dblink_send_query(
+  'asset_allocate_session',
+  pg_catalog.format(
+    'select (public.allocate_license(%L::jsonb)).id::text',
+    pg_catalog.jsonb_build_object(
+      'license_entitlement_id',
+      current_setting('test.concurrent_asset_license_id'),
+      'target_type', 'asset',
+      'asset_id', current_setting('test.concurrent_asset_id'),
+      'quantity', 1
+    )::text
+  )
+);
+select pg_catalog.pg_sleep(0.25);
+
+select ok(
+  private.test_backend_reaches_wait(
+    current_setting('test.asset_allocate_backend_pid')::integer,
+    null,
+    'Lock'
+  ),
+  'late allocation waits on the asset row locked by archive'
+);
+
+select extensions.dblink_exec('asset_archive_session', 'commit');
+
+select is(
+  (
+    select count(*)
+    from extensions.dblink_get_result('asset_allocate_session', false)
+      as response(allocation_id text)
+  ),
+  0::bigint,
+  'late allocation rechecks and rejects the newly archived asset'
+);
+
+select count(*)
+from extensions.dblink_get_result('asset_allocate_session', false)
+  as response(allocation_id text);
+
+select extensions.dblink_exec('asset_allocate_session', 'commit', false);
+
+select is(
+  (
+    select count(*)
+    from public.license_allocations as allocation
+    join public.assets as asset on asset.id = allocation.asset_id
+    where allocation.asset_id =
+        current_setting('test.concurrent_asset_id')::uuid
+      and allocation.allocation_status = 'active'
+      and asset.archived_at is not null
+  ),
+  0::bigint,
+  'archive/allocation interleaving cannot commit an active allocation on the archived asset'
+);
+
+select extensions.dblink_disconnect('asset_archive_session');
+select extensions.dblink_disconnect('asset_allocate_session');
+
 select set_config(
   'test.private_secret_count',
   (select count(*)::text from private.license_secrets),
@@ -1699,6 +2523,23 @@ select is(
   current_setting('test.vault_license_secret_count'),
   'injected secret failure leaves no orphaned named Vault secret'
 );
+
+do $concurrency_cleanup$
+begin
+  perform extensions.dblink_connect(
+    'concurrency_cleanup',
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
+  );
+  perform extensions.dblink_exec(
+    'concurrency_cleanup',
+    $$
+      delete from vault.secrets
+      where name = 'sam_license_fingerprint_pepper'
+    $$
+  );
+  perform extensions.dblink_disconnect('concurrency_cleanup');
+end;
+$concurrency_cleanup$;
 
 select * from finish();
 rollback;

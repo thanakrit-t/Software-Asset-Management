@@ -1,6 +1,6 @@
 begin;
 
-select plan(26);
+select plan(27);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -295,6 +295,19 @@ select is(
   ),
   false,
   'authenticated role cannot execute the private collision guard'
+);
+
+select is(
+  coalesce(
+    has_function_privilege(
+      'authenticated',
+      to_regprocedure('private.lock_license_plaintext_boundary()'),
+      'execute'
+    ),
+    true
+  ),
+  false,
+  'authenticated role cannot execute the private License serialization helper'
 );
 
 select is(
