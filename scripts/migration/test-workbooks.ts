@@ -62,3 +62,67 @@ export async function createAssetFixtureWorkbook(): Promise<string> {
   await workbook.xlsx.writeFile(filePath);
   return filePath;
 }
+
+export const INVENTED_SERIAL = "TEST-SERIAL-DO-NOT-USE";
+
+export async function createLicenseFixtureWorkbook(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "sam-licenses-"));
+  const filePath = path.join(directory, "licenses.xlsx");
+  const workbook = new ExcelJS.Workbook();
+
+  for (const sheetName of ["Software License FACTORY", "Software License OFFICE "]) {
+    const sheet = workbook.addWorksheet(sheetName);
+    const headers = [
+      "No.", "Maker", "Dealer", "Product Name", "Version",
+      "Product Classification", "Purchase Form", "Own\nLicense", "Use\nLicense",
+      "Serial No.", "Purchase Date", "Start Date", "End Date", "Status",
+      "Name", "Install Date", "Remark", "Remark",
+    ];
+    headers.forEach((header, index) => { sheet.getCell(8, index + 2).value = header; });
+  }
+
+  const factory = workbook.getWorksheet("Software License FACTORY")!;
+  for (const rowNumber of [9, 10]) {
+    factory.getCell(rowNumber, 2).value = rowNumber - 8;
+    factory.getCell(rowNumber, 3).value = "Example Maker";
+    factory.getCell(rowNumber, 4).value = "Example Dealer";
+    factory.getCell(rowNumber, 5).value = "Example Product";
+    factory.getCell(rowNumber, 6).value = "2026";
+    factory.getCell(rowNumber, 7).value = "Application";
+    factory.getCell(rowNumber, 8).value = "Perpetual";
+    factory.getCell(rowNumber, 9).value = 5;
+    factory.getCell(rowNumber, 10).value = 2;
+    factory.getCell(rowNumber, 11).value = INVENTED_SERIAL;
+    factory.getCell(rowNumber, 12).value = new Date(Date.UTC(2026, 7, 28));
+    factory.getCell(rowNumber, 15).value = "Active";
+  }
+  factory.getCell(11, 3).value = "Bad Date Maker";
+  factory.getCell(11, 5).value = "Bad Date Product";
+  factory.getCell(11, 9).value = 1;
+  factory.getCell(11, 12).value = "28/08/2026";
+
+  const office = workbook.getWorksheet("Software License OFFICE ")!;
+  office.getCell(9, 3).value = "Office Maker";
+  office.getCell(9, 5).value = "Office Product";
+  office.getCell(9, 9).value = 3;
+  office.getCell(9, 10).value = 1;
+
+  const summaryFactory = workbook.addWorksheet("Summary Factory");
+  summaryFactory.getCell("B3").value = "Row Labels";
+  summaryFactory.getCell("C3").value = "Sum of Own";
+  summaryFactory.getCell("D3").value = "Sum of Use";
+  summaryFactory.getCell("B4").value = "Example Product";
+  summaryFactory.getCell("C4").value = 10;
+  summaryFactory.getCell("D4").value = 4;
+
+  const summaryOffice = workbook.addWorksheet("Summary Office");
+  summaryOffice.getCell("B3").value = "Row Labels";
+  summaryOffice.getCell("C3").value = "Sum of Own";
+  summaryOffice.getCell("D3").value = "Sum of Use";
+  summaryOffice.getCell("B4").value = "Office Product";
+  summaryOffice.getCell("C4").value = 3;
+  summaryOffice.getCell("D4").value = 1;
+
+  await workbook.xlsx.writeFile(filePath);
+  return filePath;
+}

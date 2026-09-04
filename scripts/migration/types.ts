@@ -93,6 +93,7 @@ export interface LicenseStagingRow extends SourceCoordinate {
   secretMaskedHint: string | null;
   secretFingerprint: string | null;
   businessKey: string;
+  sourceSheet: string;
   rawData: Record<string, string | number | null>;
 }
 
