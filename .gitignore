@@ -12,3 +12,5 @@ Thumbs.db
 supabase/.temp/
 supabase/.branches/
 backups/
+.vercel
+.env*
