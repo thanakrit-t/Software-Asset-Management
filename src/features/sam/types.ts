@@ -1,7 +1,7 @@
 export type Role = "admin" | "user";
 
 export interface Site {
-  id: "factory" | "bangkok-office";
+  id: string;
   name: string;
   shortName: string;
 }
@@ -35,6 +35,8 @@ export interface Asset {
   internetLevel: string;
   networkInterfaces: NetworkInterface[];
   remark?: string;
+  version: number;
+  archivedAt?: string;
 }
 
 export interface SoftwareProduct {
@@ -42,8 +44,10 @@ export interface SoftwareProduct {
   publisher: string;
   name: string;
   version: string;
-  category: "Operating System" | "Office" | "Database" | "CAD" | "Utility" | "Business Application";
+  category: string;
   active: boolean;
+  versionNumber: number;
+  archivedAt?: string;
 }
 
 export type LicenseLifecycleStatus =
@@ -66,23 +70,25 @@ export interface LicenseEntitlement {
   ownedQuantity: number;
   allocatedQuantity: number;
   availableQuantity: number;
-  licenseKey: string;
-  serialNumber: string;
+  licenseKeyMasked?: string;
+  serialNumberMasked?: string;
   purchaseDate?: string;
   startDate?: string;
   endDate?: string;
   lifecycleStatus: LicenseLifecycleStatus;
   complianceStatus: ComplianceStatus;
-  siteScope: "All Sites" | "Factory" | "Bangkok Office";
+  siteScope: "All Sites" | "Factory" | "Bangkok Office" | "Selected Sites";
   owner: string;
   remark?: string;
+  version: number;
+  archivedAt?: string;
 }
 
 export interface LicenseAllocation {
   id: string;
   licenseId: string;
   productName: string;
-  targetType: "asset" | "user" | "site";
+  targetType: "asset" | "person" | "site";
   targetId: string;
   targetName: string;
   site: Site;
@@ -90,6 +96,7 @@ export interface LicenseAllocation {
   allocatedAt: string;
   status: "active" | "removed";
   remark?: string;
+  version: number;
 }
 
 export interface NotificationItem {
@@ -101,11 +108,13 @@ export interface NotificationItem {
   entityId: string;
   createdAt: string;
   read: boolean;
+  recipientId?: string;
+  dismissed: boolean;
 }
 
 export interface AuditEvent {
   id: string;
-  action: "create" | "update" | "archive" | "allocate" | "reveal-secret" | "export";
+  action: string;
   entityType: string;
   entityId: string;
   description: string;
@@ -120,4 +129,13 @@ export interface UserAccount {
   role: Role;
   status: "active" | "inactive";
   lastLoginAt?: string;
+  version: number;
+  deactivatedAt?: string;
+}
+
+
+export interface SecretReveal {
+  value: string;
+  revealedAt: string;
+  correlationId: string;
 }

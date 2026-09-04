@@ -18,7 +18,7 @@ export const sites: Site[] = [
 const factory = sites[0];
 const office = sites[1];
 
-export const assets: Asset[] = [
+const assetInputs: Array<Omit<Asset, "version">> = [
   {
     id: "tpo-083",
     assetCode: "TPO-083",
@@ -177,7 +177,9 @@ export const assets: Asset[] = [
   },
 ];
 
-export const products: SoftwareProduct[] = [
+export const assets: Asset[] = assetInputs.map((asset) => ({ ...asset, version: 1 }));
+
+const productInputs: Array<Omit<SoftwareProduct, "versionNumber">> = [
   { id: "windows-11-pro", publisher: "Microsoft", name: "Windows", version: "11 Professional", category: "Operating System", active: true },
   { id: "windows-10-pro", publisher: "Microsoft", name: "Windows", version: "10 Professional", category: "Operating System", active: true },
   { id: "windows-server-2022", publisher: "Microsoft", name: "Windows Server", version: "2022 Standard", category: "Operating System", active: true },
@@ -188,7 +190,9 @@ export const products: SoftwareProduct[] = [
   { id: "winrar-38", publisher: "win.rar GmbH", name: "WinRAR", version: "3.8", category: "Utility", active: false },
 ];
 
-const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "availableQuantity" | "complianceStatus" | "lifecycleStatus">> = [
+export const products: SoftwareProduct[] = productInputs.map((product) => ({ ...product, versionNumber: 1 }));
+
+const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "availableQuantity" | "complianceStatus" | "lifecycleStatus" | "version">> = [
   {
     id: "lic-windows-11-factory",
     reference: "LIC-FAC-2025-001",
@@ -197,8 +201,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Regular version",
     purchaseForm: "Volume License",
     ownedQuantity: 120,
-    licenseKey: "MOCK1-WIN11-FACTR-00001-ABCDE",
-    serialNumber: "SAM-MOCK-W11-001",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2025-01-15",
     startDate: "2025-01-15",
     siteScope: "Factory",
@@ -212,8 +216,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Regular version",
     purchaseForm: "Volume License",
     ownedQuantity: 40,
-    licenseKey: "MOCK2-WIN10-OFFCE-00002-FGHIJ",
-    serialNumber: "SAM-MOCK-W10-002",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2020-01-22",
     startDate: "2020-01-22",
     siteScope: "Bangkok Office",
@@ -227,8 +231,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "OEM",
     purchaseForm: "Package",
     ownedQuantity: 1,
-    licenseKey: "MOCK3-SRV22-OFFCE-00003-KLMNO",
-    serialNumber: "SAM-MOCK-SRV-003",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2023-01-18",
     startDate: "2023-01-18",
     siteScope: "Bangkok Office",
@@ -242,8 +246,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Subscription",
     purchaseForm: "Cloud Subscription",
     ownedQuantity: 33,
-    licenseKey: "MOCK4-O365F-ALLST-00004-PQRST",
-    serialNumber: "SAM-MOCK-O365-004",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2025-10-01",
     startDate: "2025-10-01",
     endDate: "2026-10-01",
@@ -258,8 +262,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Regular version",
     purchaseForm: "License",
     ownedQuantity: 78,
-    licenseKey: "MOCK5-OFF16-FACTR-00005-UVWXY",
-    serialNumber: "SAM-MOCK-O16-005",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2016-08-28",
     startDate: "2016-08-28",
     siteScope: "Factory",
@@ -273,8 +277,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Regular version",
     purchaseForm: "License",
     ownedQuantity: 1,
-    licenseKey: "MOCK6-SQL19-FACTR-00006-ZABCD",
-    serialNumber: "SAM-MOCK-SQL-006",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2019-11-11",
     startDate: "2019-11-11",
     siteScope: "Factory",
@@ -289,8 +293,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Perpetual",
     purchaseForm: "License",
     ownedQuantity: 4,
-    licenseKey: "MOCK7-CAD14-FACTR-00007-EFGHI",
-    serialNumber: "SAM-MOCK-CAD-007",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2014-04-01",
     siteScope: "Factory",
     owner: "Thai Kurabo",
@@ -303,8 +307,8 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
     classification: "Regular version",
     purchaseForm: "License",
     ownedQuantity: 43,
-    licenseKey: "MOCK8-WR380-FACTR-00008-JKLMN",
-    serialNumber: "SAM-MOCK-WR-008",
+    licenseKeyMasked: "****-MASKED",
+    serialNumberMasked: "****-MASKED",
     purchaseDate: "2009-04-22",
     endDate: "2015-04-22",
     siteScope: "Factory",
@@ -312,12 +316,12 @@ const licenseInputs: Array<Omit<LicenseEntitlement, "allocatedQuantity" | "avail
   },
 ];
 
-export const allocations: LicenseAllocation[] = [
+const allocationInputs: Array<Omit<LicenseAllocation, "version">> = [
   { id: "alloc-001", licenseId: "lic-windows-11-factory", productName: "Windows 11 Professional", targetType: "asset", targetId: "tpo-083", targetName: "TPO-083-PC", site: factory, quantity: 1, allocatedAt: "2025-01-16", status: "active" },
   { id: "alloc-002", licenseId: "lic-windows-11-factory", productName: "Windows 11 Professional", targetType: "asset", targetId: "twe-096", targetName: "TWE-096-NB", site: factory, quantity: 1, allocatedAt: "2025-05-21", status: "active" },
   { id: "alloc-003", licenseId: "lic-windows-10-office", productName: "Windows 10 Professional", targetType: "asset", targetId: "tkcbkklt001", targetName: "TKCBKKLT001", site: office, quantity: 1, allocatedAt: "2020-01-22", status: "active" },
   { id: "alloc-004", licenseId: "lic-server-2022", productName: "Windows Server 2022 Standard", targetType: "asset", targetId: "thai-kurabo-server", targetName: "THAI-KURABO", site: office, quantity: 1, allocatedAt: "2023-01-18", status: "active" },
-  { id: "alloc-005", licenseId: "lic-office-365", productName: "Office 365 Family", targetType: "user", targetId: "user-supachai", targetName: "Supachai", site: office, quantity: 1, allocatedAt: "2025-10-01", status: "active" },
+  { id: "alloc-005", licenseId: "lic-office-365", productName: "Office 365 Family", targetType: "person", targetId: "user-supachai", targetName: "Supachai", site: office, quantity: 1, allocatedAt: "2025-10-01", status: "active" },
   { id: "alloc-006", licenseId: "lic-autocad-2014", productName: "AutoCAD 2014", targetType: "asset", targetId: "tpo-069", targetName: "TPO-069-PC", site: factory, quantity: 1, allocatedAt: "2019-04-01", status: "active" },
 { id: "alloc-base-w11", licenseId: "lic-windows-11-factory", productName: "Windows 11 Professional", targetType: "site", targetId: "baseline-factory", targetName: "Imported baseline (Factory)", site: factory, quantity: 102, allocatedAt: "2026-08-28", status: "active", remark: "จำนวนสรุปจาก Excel สำหรับ migration รอบแรก" },
   { id: "alloc-base-w10", licenseId: "lic-windows-10-office", productName: "Windows 10 Professional", targetType: "site", targetId: "baseline-office", targetName: "Imported baseline (Office)", site: office, quantity: 34, allocatedAt: "2026-08-28", status: "active", remark: "จำนวนสรุปจาก Excel สำหรับ migration รอบแรก" },
@@ -328,16 +332,20 @@ export const allocations: LicenseAllocation[] = [
   { id: "alloc-base-winrar", licenseId: "lic-winrar-legacy", productName: "WinRAR 3.8", targetType: "site", targetId: "baseline-factory", targetName: "Imported baseline (Factory)", site: factory, quantity: 40, allocatedAt: "2026-08-28", status: "active", remark: "จำนวนสรุปจาก Excel สำหรับ migration รอบแรก" },
 ];
 
+export const allocations: LicenseAllocation[] = allocationInputs.map((allocation) => ({ ...allocation, version: 1 }));
+
 export const licenses: LicenseEntitlement[] = licenseInputs.map((license) =>
-  deriveEntitlement(license, allocations),
+  deriveEntitlement({ ...license, version: 1 }, allocations),
 );
 
-export const notifications: NotificationItem[] = [
+const notificationInputs: Array<Omit<NotificationItem, "dismissed">> = [
   { id: "notice-001", title: "Office 365 ใกล้หมดอายุ", message: "Subscription จำนวน 33 seats จะหมดอายุภายใน 30 วัน", severity: "warning", entityType: "license", entityId: "lic-office-365", createdAt: "2026-09-01T08:30:00Z", read: false },
   { id: "notice-002", title: "SQL Server ใช้เกินสิทธิ์", message: "จัดสรร 2 seats จากสิทธิ์ที่มี 1 seat", severity: "critical", entityType: "license", entityId: "lic-sql-2019", createdAt: "2026-09-01T07:15:00Z", read: false },
   { id: "notice-003", title: "WinRAR License หมดอายุ", message: "License รุ่นเดิมหมดอายุและควรตรวจแผนทดแทน", severity: "critical", entityType: "license", entityId: "lic-winrar-legacy", createdAt: "2026-08-31T04:10:00Z", read: true },
   { id: "notice-004", title: "Asset รอการตรวจสอบ", message: "SCAN01 มีสถานะ Repair และข้อมูล Network ต้องยืนยัน", severity: "info", entityType: "asset", entityId: "scan01", createdAt: "2026-08-30T09:45:00Z", read: true },
 ];
+
+export const notifications: NotificationItem[] = notificationInputs.map((notification) => ({ ...notification, dismissed: false }));
 
 export const auditEvents: AuditEvent[] = [
   { id: "audit-001", action: "update", entityType: "Asset", entityId: "tpo-083", description: "อัปเดต IP Address และ VLAN", actor: "Admin User", occurredAt: "2026-09-01T09:10:00Z" },
@@ -346,9 +354,11 @@ export const auditEvents: AuditEvent[] = [
   { id: "audit-004", action: "reveal-secret", entityType: "License", entityId: "lic-server-2022", description: "เปิดดู License Key ฉบับเต็ม", actor: "Admin User", occurredAt: "2026-08-29T08:05:00Z" },
 ];
 
-export const userAccounts: UserAccount[] = [
+const userAccountInputs: Array<Omit<UserAccount, "version">> = [
   { id: "user-admin", name: "Admin User", email: "admin@thaikurabo.example", role: "admin", status: "active", lastLoginAt: "2026-09-01T09:00:00Z" },
   { id: "user-it-manager", name: "IT Manager", email: "it.manager@thaikurabo.example", role: "admin", status: "active", lastLoginAt: "2026-09-01T08:40:00Z" },
   { id: "user-viewer", name: "Report Viewer", email: "viewer@thaikurabo.example", role: "user", status: "active", lastLoginAt: "2026-08-31T06:20:00Z" },
   { id: "user-auditor", name: "Internal Auditor", email: "audit@thaikurabo.example", role: "user", status: "inactive", lastLoginAt: "2026-07-15T04:00:00Z" },
 ];
+
+export const userAccounts: UserAccount[] = userAccountInputs.map((user) => ({ ...user, version: 1 }));
