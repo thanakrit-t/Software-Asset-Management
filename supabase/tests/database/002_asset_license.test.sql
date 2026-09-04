@@ -1,3 +1,8 @@
+select exists (
+  select 1 from pg_catalog.pg_extension where extname = 'dblink'
+) as dblink_preexisting
+\gset cleanup_
+
 begin;
 
 select plan(155);
@@ -914,6 +919,12 @@ select throws_ok(
   'license with active allocations cannot be archived'
 );
 
+reset role;
+savepoint missing_pepper_isolation;
+delete from vault.secrets
+where name = 'sam_license_fingerprint_pepper';
+set local role authenticated;
+
 select throws_ok(
   $$
     select public.create_license_entitlement(
@@ -941,33 +952,49 @@ select is(
 );
 
 reset role;
+rollback to savepoint missing_pepper_isolation;
 create extension if not exists dblink with schema extensions;
 
 do $concurrency_pepper$
+declare
+  pepper_id uuid;
+  pepper_created boolean;
 begin
   perform extensions.dblink_connect(
     'concurrency_pepper_fixture',
     'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
   );
-  perform extensions.dblink_exec(
+  select result.id, result.created
+  into strict pepper_id, pepper_created
+  from extensions.dblink(
     'concurrency_pepper_fixture',
     $remote$
-      do $$
-      begin
-        if not exists (
-          select 1
-          from vault.decrypted_secrets
-          where name = 'sam_license_fingerprint_pepper'
-        ) then
-          perform vault.create_secret(
+      with existing as materialized (
+        select secret.id
+        from vault.secrets as secret
+        where secret.name = 'sam_license_fingerprint_pepper'
+        order by secret.created_at desc
+        limit 1
+      ),
+      created as (
+        select vault.create_secret(
             'TDD-ONLY-CONCURRENCY-PEPPER',
             'sam_license_fingerprint_pepper',
             'Disposable local concurrency pepper'
-          );
-        end if;
-      end;
-      $$
+          ) as id
+        where not exists (select 1 from existing)
+      )
+      select existing.id, false as created from existing
+      union all
+      select created.id, true as created from created
     $remote$
+  ) as result(id uuid, created boolean);
+
+  perform set_config('test.concurrent_pepper_id', pepper_id::text, true);
+  perform set_config(
+    'test.concurrent_pepper_created',
+    pepper_created::text,
+    true
   );
   perform extensions.dblink_disconnect('concurrency_pepper_fixture');
 end;
@@ -1120,6 +1147,7 @@ do $fixture$
 declare
   connection_string constant text :=
     'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres';
+  license_vault_id uuid;
 begin
   perform extensions.dblink_connect('concurrency_fixture', connection_string);
 
@@ -1263,49 +1291,40 @@ begin
     )
   );
 
-  perform extensions.dblink_exec(
-    'concurrency_fixture',
-    $remote$
-      do $$
-      begin
-        if not exists (
-          select 1
-          from vault.decrypted_secrets
-          where name = 'sam_license_fingerprint_pepper'
-        ) then
-          perform vault.create_secret(
-            'TDD-ONLY-CONCURRENCY-PEPPER',
-            'sam_license_fingerprint_pepper',
-            'Disposable local concurrency pepper'
-          );
-        end if;
-      end;
-      $$
-    $remote$
-  );
-
-  perform extensions.dblink_exec(
+  select created.vault_id
+  into strict license_vault_id
+  from extensions.dblink(
     'concurrency_fixture',
     pg_catalog.format(
       $remote$
         with created_secret as (
           select vault.create_secret(%L, %L, 'Concurrency test key') as id
+        ),
+        inserted_reference as (
+          insert into private.license_secrets (
+            license_entitlement_id, license_key_vault_secret_id,
+            license_key_fingerprint
+          )
+          select
+            %L::uuid,
+            created_secret.id,
+            private.fingerprint_license_secret('license_key', %L)
+          from created_secret
+          returning license_key_vault_secret_id
         )
-        insert into private.license_secrets (
-          license_entitlement_id, license_key_vault_secret_id,
-          license_key_fingerprint
-        )
-        select
-          %L::uuid,
-          created_secret.id,
-          private.fingerprint_license_secret('license_key', %L)
-        from created_secret
+        select license_key_vault_secret_id from inserted_reference
       $remote$,
       current_setting('test.concurrent_original_secret'),
       'sam_license_' || current_setting('test.concurrent_license_b') || '_license_key',
       current_setting('test.concurrent_license_b'),
       current_setting('test.concurrent_original_secret')
     )
+  ) as created(vault_id uuid);
+
+  perform set_config(
+    'test.concurrent_license_vault_id',
+    license_vault_id::text,
+    true
   );
 
   perform extensions.dblink_disconnect('concurrency_fixture');
@@ -1375,14 +1394,17 @@ select ok(
 
 select extensions.dblink_exec('license_ordinary_session', 'commit');
 
+select count(*)
+from extensions.dblink_get_result('license_secret_session', false)
+  as response(entitlement_id text);
+
 select is(
-  (
-    select count(*)
-    from extensions.dblink_get_result('license_secret_session', false)
-      as response(entitlement_id text)
+  pg_catalog.split_part(
+    extensions.dblink_error_message('license_secret_session'),
+    E'\n', 1
   ),
-  0::bigint,
-  'waiting secret rotation rechecks global plaintext after ordinary commit'
+  'ERROR:  LICENSE_SECRET_COLLISION',
+  'waiting secret rotation rejects with the exact generic collision error'
 );
 
 select count(*)
@@ -2284,14 +2306,17 @@ select ok(
 
 select extensions.dblink_exec('admin_role_session', 'commit');
 
+select count(*)
+from extensions.dblink_get_result('admin_status_session', false)
+  as response(profile_id text);
+
 select is(
-  (
-    select count(*)
-    from extensions.dblink_get_result('admin_status_session', false)
-      as response(profile_id text)
+  pg_catalog.split_part(
+    extensions.dblink_error_message('admin_status_session'),
+    E'\n', 1
   ),
-  0::bigint,
-  'waiting last-admin mutation rechecks and rejects after the first commits'
+  'ERROR:  LAST_ADMIN_PROTECTED',
+  'waiting last-admin mutation rejects with the exact protected error'
 );
 
 select count(*)
@@ -2408,14 +2433,17 @@ select ok(
 
 select extensions.dblink_exec('asset_archive_session', 'commit');
 
+select count(*)
+from extensions.dblink_get_result('asset_allocate_session', false)
+  as response(allocation_id text);
+
 select is(
-  (
-    select count(*)
-    from extensions.dblink_get_result('asset_allocate_session', false)
-      as response(allocation_id text)
+  pg_catalog.split_part(
+    extensions.dblink_error_message('asset_allocate_session'),
+    E'\n', 1
   ),
-  0::bigint,
-  'late allocation rechecks and rejects the newly archived asset'
+  'ERROR:  INVALID_LICENSE_TARGET',
+  'late allocation rejects with the exact invalid target error'
 );
 
 select count(*)
@@ -2524,22 +2552,286 @@ select is(
   'injected secret failure leaves no orphaned named Vault secret'
 );
 
+select
+  current_setting('test.concurrent_admin_a') as concurrent_admin_a,
+  current_setting('test.concurrent_admin_b') as concurrent_admin_b,
+  current_setting('test.concurrent_publisher_id') as concurrent_publisher_id,
+  current_setting('test.concurrent_product_id') as concurrent_product_id,
+  current_setting('test.concurrent_asset_id') as concurrent_asset_id,
+  current_setting('test.concurrent_asset_license_id') as concurrent_asset_license_id,
+  current_setting('test.concurrent_license_a') as concurrent_license_a,
+  current_setting('test.concurrent_license_b') as concurrent_license_b,
+  current_setting('test.concurrent_pepper_id') as concurrent_pepper_id,
+  current_setting('test.concurrent_pepper_created') as concurrent_pepper_created,
+  current_setting('test.concurrent_license_vault_id') as concurrent_license_vault_id
+\gset cleanup_
+
+select * from finish();
+rollback;
+
+select
+  set_config('test.concurrent_admin_a', :'cleanup_concurrent_admin_a', false)
+    as concurrent_admin_a,
+  set_config('test.concurrent_admin_b', :'cleanup_concurrent_admin_b', false)
+    as concurrent_admin_b,
+  set_config('test.concurrent_publisher_id', :'cleanup_concurrent_publisher_id', false)
+    as concurrent_publisher_id,
+  set_config('test.concurrent_product_id', :'cleanup_concurrent_product_id', false)
+    as concurrent_product_id,
+  set_config('test.concurrent_asset_id', :'cleanup_concurrent_asset_id', false)
+    as concurrent_asset_id,
+  set_config('test.concurrent_asset_license_id', :'cleanup_concurrent_asset_license_id', false)
+    as concurrent_asset_license_id,
+  set_config('test.concurrent_license_a', :'cleanup_concurrent_license_a', false)
+    as concurrent_license_a,
+  set_config('test.concurrent_license_b', :'cleanup_concurrent_license_b', false)
+    as concurrent_license_b,
+  set_config('test.concurrent_pepper_id', :'cleanup_concurrent_pepper_id', false)
+    as concurrent_pepper_id,
+  set_config('test.concurrent_pepper_created', :'cleanup_concurrent_pepper_created', false)
+    as concurrent_pepper_created,
+  set_config('test.concurrent_license_vault_id', :'cleanup_concurrent_license_vault_id', false)
+    as concurrent_license_vault_id
+\gset restored_
+
+\if :cleanup_dblink_preexisting
+\else
+create extension dblink with schema extensions;
+\endif
+
 do $concurrency_cleanup$
 begin
   perform extensions.dblink_connect(
     'concurrency_cleanup',
-    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=postgres password=postgres'
+    'host=supabase_db_software-asset-management port=5432 dbname=postgres user=supabase_admin password=postgres'
   );
   perform extensions.dblink_exec(
     'concurrency_cleanup',
-    $$
-      delete from vault.secrets
-      where name = 'sam_license_fingerprint_pepper'
-    $$
+    pg_catalog.format(
+      $remote$
+        begin;
+        set local session_replication_role = replica;
+
+        delete from audit.audit_events as event
+        where event.actor_profile_id in (%L::uuid, %L::uuid)
+          or event.entity_id in (
+            %L::uuid, %L::uuid, %L::uuid, %L::uuid,
+            %L::uuid, %L::uuid, %L::uuid, %L::uuid
+          )
+          or event.entity_id in (
+            select allocation.id
+            from public.license_allocations as allocation
+            where allocation.license_entitlement_id in (
+                %L::uuid, %L::uuid, %L::uuid
+              )
+              or allocation.asset_id = %L::uuid
+          );
+
+        set local session_replication_role = origin;
+
+        delete from public.license_allocations as allocation
+        where allocation.license_entitlement_id in (
+            %L::uuid, %L::uuid, %L::uuid
+          )
+          or allocation.asset_id = %L::uuid;
+
+        delete from public.license_site_scopes as scope
+        where scope.license_entitlement_id in (
+          %L::uuid, %L::uuid, %L::uuid
+        );
+
+        delete from private.license_secrets as secret
+        where secret.license_entitlement_id in (
+          %L::uuid, %L::uuid, %L::uuid
+        );
+
+        delete from public.license_entitlements as entitlement
+        where entitlement.id in (%L::uuid, %L::uuid, %L::uuid);
+
+        delete from public.assets as asset
+        where asset.id = %L::uuid;
+
+        delete from public.software_products as product
+        where product.id = %L::uuid;
+
+        delete from public.publishers as publisher
+        where publisher.id = %L::uuid;
+
+        delete from public.profiles as profile
+        where profile.id in (%L::uuid, %L::uuid);
+
+        delete from auth.users as account
+        where account.id in (%L::uuid, %L::uuid);
+
+        delete from vault.secrets as secret
+        where secret.id = %L::uuid
+          and secret.name = %L;
+
+        commit;
+      $remote$,
+      current_setting('test.concurrent_admin_a'),
+      current_setting('test.concurrent_admin_b'),
+      current_setting('test.concurrent_publisher_id'),
+      current_setting('test.concurrent_product_id'),
+      current_setting('test.concurrent_asset_id'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_admin_a'),
+      current_setting('test.concurrent_admin_b'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_asset_id'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_asset_id'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_asset_license_id'),
+      current_setting('test.concurrent_license_a'),
+      current_setting('test.concurrent_license_b'),
+      current_setting('test.concurrent_asset_id'),
+      current_setting('test.concurrent_product_id'),
+      current_setting('test.concurrent_publisher_id'),
+      current_setting('test.concurrent_admin_a'),
+      current_setting('test.concurrent_admin_b'),
+      current_setting('test.concurrent_admin_a'),
+      current_setting('test.concurrent_admin_b'),
+      current_setting('test.concurrent_license_vault_id'),
+      'sam_license_' || current_setting('test.concurrent_license_b') ||
+        '_license_key'
+    )
   );
+
+  if current_setting('test.concurrent_pepper_created')::boolean then
+    perform extensions.dblink_exec(
+      'concurrency_cleanup',
+      pg_catalog.format(
+        $remote$
+          delete from vault.secrets as secret
+          where secret.id = %L::uuid
+            and secret.name = 'sam_license_fingerprint_pepper'
+        $remote$,
+        current_setting('test.concurrent_pepper_id')
+      )
+    );
+  end if;
+
   perform extensions.dblink_disconnect('concurrency_cleanup');
 end;
 $concurrency_cleanup$;
 
-select * from finish();
-rollback;
+do $concurrency_cleanup_assertions$
+begin
+  if exists (
+    select 1
+    from audit.audit_events as event
+    where event.actor_profile_id in (
+        current_setting('test.concurrent_admin_a')::uuid,
+        current_setting('test.concurrent_admin_b')::uuid
+      )
+      or event.entity_id in (
+        current_setting('test.concurrent_publisher_id')::uuid,
+        current_setting('test.concurrent_product_id')::uuid,
+        current_setting('test.concurrent_asset_id')::uuid,
+        current_setting('test.concurrent_asset_license_id')::uuid,
+        current_setting('test.concurrent_license_a')::uuid,
+        current_setting('test.concurrent_license_b')::uuid,
+        current_setting('test.concurrent_admin_a')::uuid,
+        current_setting('test.concurrent_admin_b')::uuid
+      )
+  ) or exists (
+    select 1
+    from public.license_allocations as allocation
+    where allocation.license_entitlement_id in (
+        current_setting('test.concurrent_asset_license_id')::uuid,
+        current_setting('test.concurrent_license_a')::uuid,
+        current_setting('test.concurrent_license_b')::uuid
+      )
+      or allocation.asset_id = current_setting('test.concurrent_asset_id')::uuid
+  ) or exists (
+    select 1
+    from public.license_site_scopes as scope
+    where scope.license_entitlement_id in (
+      current_setting('test.concurrent_asset_license_id')::uuid,
+      current_setting('test.concurrent_license_a')::uuid,
+      current_setting('test.concurrent_license_b')::uuid
+    )
+  ) or exists (
+    select 1
+    from private.license_secrets as secret
+    where secret.license_entitlement_id in (
+      current_setting('test.concurrent_asset_license_id')::uuid,
+      current_setting('test.concurrent_license_a')::uuid,
+      current_setting('test.concurrent_license_b')::uuid
+    )
+  ) or exists (
+    select 1
+    from public.license_entitlements as entitlement
+    where entitlement.id in (
+      current_setting('test.concurrent_asset_license_id')::uuid,
+      current_setting('test.concurrent_license_a')::uuid,
+      current_setting('test.concurrent_license_b')::uuid
+    )
+  ) or exists (
+    select 1 from public.assets as asset
+    where asset.id = current_setting('test.concurrent_asset_id')::uuid
+  ) or exists (
+    select 1 from public.software_products as product
+    where product.id = current_setting('test.concurrent_product_id')::uuid
+  ) or exists (
+    select 1 from public.publishers as publisher
+    where publisher.id = current_setting('test.concurrent_publisher_id')::uuid
+  ) or exists (
+    select 1 from public.profiles as profile
+    where profile.id in (
+      current_setting('test.concurrent_admin_a')::uuid,
+      current_setting('test.concurrent_admin_b')::uuid
+    )
+  ) or exists (
+    select 1 from auth.users as account
+    where account.id in (
+      current_setting('test.concurrent_admin_a')::uuid,
+      current_setting('test.concurrent_admin_b')::uuid
+    )
+  ) or exists (
+    select 1 from vault.secrets as secret
+    where secret.id = current_setting('test.concurrent_license_vault_id')::uuid
+  ) then
+    raise exception using
+      errcode = 'P0001',
+      message = 'CONCURRENCY_FIXTURE_CLEANUP_FAILED';
+  end if;
+
+  if current_setting('test.concurrent_pepper_created')::boolean then
+    if exists (
+      select 1 from vault.secrets as secret
+      where secret.id = current_setting('test.concurrent_pepper_id')::uuid
+        and secret.name = 'sam_license_fingerprint_pepper'
+    ) then
+      raise exception using
+        errcode = 'P0001',
+        message = 'CONCURRENCY_PEPPER_CLEANUP_FAILED';
+    end if;
+  elsif not exists (
+    select 1 from vault.secrets as secret
+    where secret.id = current_setting('test.concurrent_pepper_id')::uuid
+      and secret.name = 'sam_license_fingerprint_pepper'
+  ) then
+    raise exception using
+      errcode = 'P0001',
+      message = 'CONCURRENCY_PEPPER_PRESERVATION_FAILED';
+  end if;
+end;
+$concurrency_cleanup_assertions$;
+
+\if :cleanup_dblink_preexisting
+\else
+drop extension dblink;
+\endif
