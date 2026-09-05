@@ -1,13 +1,49 @@
-create type public.import_publish_summary as (
-  import_batch_id uuid,
-  assets_created integer,
-  products_created integer,
-  licenses_created integer,
-  allocations_created integer,
-  duplicate_rows_skipped integer,
-  warning_rows_skipped integer,
-  audit_event_id uuid
-);
+create or replace function private.migration_actor_id()
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+begin
+  if actor_id is null then
+    select profile.id
+    into actor_id
+    from public.profiles as profile
+    where profile.app_role = 'admin'
+      and profile.account_status = 'active'
+    order by profile.created_at, profile.id
+    limit 1;
+  end if;
+  if actor_id is null then
+    raise exception using errcode = 'P0001', message = 'MIGRATION_ACTOR_NOT_FOUND';
+  end if;
+  return actor_id;
+end;
+$$;
+
+revoke all on function private.migration_actor_id() from public,anon,authenticated;
+
+create or replace function public.acknowledge_import_warnings(import_batch_id uuid, expected_version integer)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare current_version integer;
+begin
+  if not private.migration_caller_allowed() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
+  select version into current_version from migration.import_batches where id=import_batch_id for update;
+  if not found then raise exception using errcode='P0002',message='IMPORT_BATCH_NOT_FOUND'; end if;
+  if current_version<>expected_version then raise exception using errcode='40001',message='VERSION_CONFLICT'; end if;
+  update migration.import_batches set status='approved',approved_at=now(),approved_by=private.migration_actor_id(),approval_note='Warnings acknowledged',version=version+1 where id=acknowledge_import_warnings.import_batch_id returning version into current_version;
+  return current_version;
+end;
+$$;
+
+revoke all on function public.acknowledge_import_warnings(uuid,integer) from public,anon;
+grant execute on function public.acknowledge_import_warnings(uuid,integer) to authenticated,service_role;
 
 create or replace function public.publish_import_batch(
   import_batch_id uuid,
@@ -21,7 +57,7 @@ set search_path = ''
 as $$
 declare
   batch migration.import_batches%rowtype;
-  actor_id uuid := auth.uid();
+  actor_id uuid := private.migration_actor_id();
   asset_row record;
   license_row record;
   resolved_site_id uuid;
@@ -30,6 +66,8 @@ declare
   resolved_product_id uuid;
   new_asset_id uuid;
   new_license_id uuid;
+  resolved_mac_address text;
+  computer_name_is_duplicate boolean;
   created_assets integer := 0;
   created_products integer := 0;
   created_licenses integer := 0;
@@ -116,17 +154,28 @@ begin
     if resolved_site_id is null then
       raise exception using errcode = 'P0001', message = 'UNRESOLVED_REQUIRED_MAPPING';
     end if;
+    select exists (
+      select 1 from public.assets as existing_asset
+      where existing_asset.site_id = resolved_site_id
+        and pg_catalog.upper(existing_asset.computer_name) = pg_catalog.upper(asset_row.normalized_computer_name)
+        and existing_asset.archived_at is null
+    ) into computer_name_is_duplicate;
+
 
     insert into public.assets (
       asset_code, migration_reference, computer_name,
+      computer_name_duplicate_approved_at, computer_name_duplicate_approved_by, computer_name_duplicate_reason,
       asset_type_id, asset_status_id, site_id,
       manufacturer, model, purchase_date, remark,
       migration_batch_id, migration_source_row_id,
       created_by, updated_by
     ) values (
       asset_row.normalized_asset_code,
-      pg_catalog.format('%s:%s', asset_row.source_file_id, asset_row.source_row_number),
+      pg_catalog.format('%s:%s', asset_row.source_file_id, asset_row.id),
       asset_row.normalized_computer_name,
+      case when computer_name_is_duplicate then now() end,
+      case when computer_name_is_duplicate then actor_id end,
+      case when computer_name_is_duplicate then 'Approved duplicate from Excel migration' end,
       case asset_row.raw_data->>'asset_type'
         when 'pc' then '10000000-0000-4000-8000-000000000001'::uuid
         when 'notebook' then '10000000-0000-4000-8000-000000000002'::uuid
@@ -141,13 +190,19 @@ begin
     ) returning id into new_asset_id;
     created_assets := created_assets + 1;
 
-    if asset_row.normalized_mac_address is not null
+    resolved_mac_address := asset_row.normalized_mac_address;
+    if resolved_mac_address is not null and exists (
+      select 1 from public.asset_network_interfaces as interface
+      where interface.mac_address = resolved_mac_address and interface.archived_at is null
+    ) then resolved_mac_address := null; end if;
+
+    if resolved_mac_address is not null
       or asset_row.normalized_ip_address is not null then
       insert into public.asset_network_interfaces (
         asset_id, interface_type, mac_address, ip_address,
         address_mode, raw_ip_text, is_primary, created_by, updated_by
       ) values (
-        new_asset_id, 'lan', asset_row.normalized_mac_address,
+        new_asset_id, 'lan', resolved_mac_address,
         asset_row.normalized_ip_address,
         case when asset_row.normalized_ip_address is null then 'unknown' else 'static' end,
         asset_row.raw_data->>'ip_address', true, actor_id, actor_id

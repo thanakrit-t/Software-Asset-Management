@@ -1,6 +1,6 @@
 begin;
 
-select plan(28);
+select plan(31);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -35,6 +35,12 @@ select throws_ok(
 
 reset role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+do $fixture$
+begin
+  perform vault.create_secret(
+    'local-test-pepper-not-for-production', 'sam_license_fingerprint_pepper', 'pgTAP fixture'
+  );
+end $fixture$;
 
 select lives_ok(
   $$ select public.begin_import_batch(jsonb_build_object(
@@ -82,8 +88,8 @@ select throws_ok(
 
 select lives_ok(
   $$ select public.stage_asset_rows(current_setting('test.batch_id')::uuid, jsonb_build_array(
-    jsonb_build_object('source_file_id',current_setting('test.asset_file_id'),'sheet_name','Software(Factory)','source_row_number',7,'source_row_hash',repeat('1',64),'raw_data',jsonb_build_object('label','asset'), 'normalized_asset_code','MIG-A-001','normalized_computer_name','MIG-PC-001','normalized_site_code','FACTORY'),
-    jsonb_build_object('source_file_id',current_setting('test.asset_file_id'),'sheet_name','Software(Factory)','source_row_number',8,'source_row_hash',repeat('2',64),'raw_data',jsonb_build_object('label','duplicate'), 'normalized_asset_code','MIG-A-001','normalized_computer_name','MIG-PC-DUP','normalized_site_code','FACTORY'),
+    jsonb_build_object('source_file_id',current_setting('test.asset_file_id'),'sheet_name','Software(Factory)','source_row_number',7,'source_row_hash',repeat('1',64),'raw_data',jsonb_build_object('label','asset'), 'normalized_asset_code','MIG-A-001','normalized_computer_name','MIG-PC-001','normalized_site_code','FACTORY','normalized_mac_address','AA:BB:CC:DD:EE:FF'),
+    jsonb_build_object('source_file_id',current_setting('test.asset_file_id'),'sheet_name','Software(Office)','source_row_number',7,'source_row_hash',repeat('2',64),'raw_data',jsonb_build_object('label','duplicate'), 'normalized_asset_code','MIG-A-001','normalized_computer_name','MIG-PC-DUP','normalized_site_code','FACTORY','normalized_mac_address','AA:BB:CC:DD:EE:FF','normalized_ip_address','10.0.0.2'),
     jsonb_build_object('source_file_id',current_setting('test.asset_file_id'),'sheet_name','Software(Factory)','source_row_number',9,'source_row_hash',repeat('3',64),'raw_data',jsonb_build_object('label','bad'), 'normalized_site_code','FACTORY')
   )) $$,
   'asset staging accepts sanitized rows'
@@ -91,7 +97,7 @@ select lives_ok(
 
 select lives_ok(
   $$ select public.stage_license_rows(current_setting('test.batch_id')::uuid, jsonb_build_array(
-    jsonb_build_object('source_file_id',current_setting('test.license_file_id'),'sheet_name','Software License FACTORY','source_row_number',9,'source_row_hash',repeat('4',64),'raw_data',jsonb_build_object('label','license'), 'normalized_publisher','Migration Publisher','normalized_vendor','Migration Vendor','normalized_product_name','Migration Product','normalized_version','1','normalized_classification','Commercial','normalized_purchase_form','Perpetual','normalized_owned_quantity',3,'normalized_record_status','active','serial_present',true,'serial_fingerprint',repeat('5',64),'serial_masked_hint','MASKED-ONLY'),
+    jsonb_build_object('source_file_id',current_setting('test.license_file_id'),'sheet_name','Software License FACTORY','source_row_number',9,'source_row_hash',repeat('4',64),'raw_data',jsonb_build_object('label','license'), 'normalized_publisher','Migration Publisher','normalized_vendor','Migration Vendor','normalized_product_name','Migration Product','normalized_version','1','normalized_classification','Commercial','normalized_purchase_form','Perpetual','normalized_owned_quantity',3,'normalized_record_status','active','normalized_start_date','2027-01-01','normalized_end_date','2026-01-01','serial_present',true,'serial_fingerprint',repeat('5',64),'serial_masked_hint','MASKED-ONLY'),
     jsonb_build_object('source_file_id',current_setting('test.license_file_id'),'sheet_name','Software License FACTORY','source_row_number',10,'source_row_hash',repeat('6',64),'raw_data',jsonb_build_object('label','warning'), 'normalized_publisher','Migration Publisher','normalized_product_name','Warning Product','normalized_owned_quantity',1)
   )) $$,
   'license staging accepts fingerprints and masked hints without plaintext'
@@ -116,26 +122,30 @@ select is((public.get_import_batch_review(current_setting('test.batch_id')::uuid
 select is((public.get_import_batch_review(current_setting('test.batch_id')::uuid)::text like '%FORBIDDEN%'), false, 'review DTO contains no plaintext secret value');
 
 select throws_ok($$ select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid, 1) $$, '40001', 'VERSION_CONFLICT', 'warning acknowledgement enforces optimistic version');
-select lives_ok($$ select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid, (select version from migration.import_batches where id=current_setting('test.batch_id')::uuid)) $$, 'Admin can acknowledge warnings');
+select lives_ok($$ select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer)) $$, 'Admin can acknowledge warnings');
 
-select throws_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, (select version from migration.import_batches where id=current_setting('test.batch_id')::uuid), true) $$, 'P0001', 'IMPORT_HAS_ERRORS', 'batch with errors cannot publish');
+select throws_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer), true) $$, 'P0001', 'IMPORT_HAS_ERRORS', 'batch with errors cannot publish');
 
 reset role;
 
-update migration.asset_staging_rows set normalized_asset_code='MIG-A-002', normalized_computer_name='MIG-PC-002' where source_row_number=8;
+update migration.asset_staging_rows set normalized_asset_code='MIG-A-002', normalized_computer_name='MIG-PC-001' where raw_data->>'label'='duplicate';
 update migration.asset_staging_rows set normalized_asset_code='MIG-A-003', normalized_computer_name='MIG-PC-003' where source_row_number=9;
 select public.validate_import_batch(current_setting('test.batch_id')::uuid);
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"40000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid, (select version from migration.import_batches where id=current_setting('test.batch_id')::uuid));
+select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer));
 
-select lives_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, (select version from migration.import_batches where id=current_setting('test.batch_id')::uuid), true) $$, 'eligible batch publishes atomically');
+select lives_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer), true) $$, 'eligible batch publishes atomically');
 select is((select count(*)::integer from public.assets where migration_batch_id=current_setting('test.batch_id')::uuid), 3, 'publish creates traced Assets');
 select is((select count(*)::integer from public.license_entitlements where migration_batch_id=current_setting('test.batch_id')::uuid), 2, 'publish creates traced License entitlements');
+select is((select end_date from public.license_entitlements where migration_batch_id=current_setting('test.batch_id')::uuid and migration_source_row_id=(select id from migration.license_staging_rows where source_row_number=9)), null::date, 'invalid source date range keeps original in staging and clears operational end date');
+reset role;
 select is((select count(*)::integer from audit.audit_events where entity_type='import_batch' and entity_id=current_setting('test.batch_id')::uuid and action='publish'), 1, 'publish appends one sanitized audit event');
 select is((select status::text from migration.import_batches where id=current_setting('test.batch_id')::uuid), 'committed', 'publish marks batch committed last');
-select throws_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, (select version from migration.import_batches where id=current_setting('test.batch_id')::uuid), true) $$, 'P0001', 'IMPORT_ALREADY_PUBLISHED', 'committed batch cannot publish twice');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"40000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select throws_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer), true) $$, 'P0001', 'IMPORT_ALREADY_PUBLISHED', 'committed batch cannot publish twice');
 
 select is(has_function_privilege('anon','public.publish_import_batch(uuid,integer,boolean)','execute'), false, 'anon cannot execute publish');
 select is(has_function_privilege('authenticated','public.publish_import_batch(uuid,integer,boolean)','execute'), true, 'authenticated may execute only guarded publish boundary');

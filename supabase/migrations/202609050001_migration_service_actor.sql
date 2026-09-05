@@ -1,13 +1,49 @@
-create type public.import_publish_summary as (
-  import_batch_id uuid,
-  assets_created integer,
-  products_created integer,
-  licenses_created integer,
-  allocations_created integer,
-  duplicate_rows_skipped integer,
-  warning_rows_skipped integer,
-  audit_event_id uuid
-);
+create or replace function private.migration_actor_id()
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+begin
+  if actor_id is null then
+    select profile.id
+    into actor_id
+    from public.profiles as profile
+    where profile.app_role = 'admin'
+      and profile.account_status = 'active'
+    order by profile.created_at, profile.id
+    limit 1;
+  end if;
+  if actor_id is null then
+    raise exception using errcode = 'P0001', message = 'MIGRATION_ACTOR_NOT_FOUND';
+  end if;
+  return actor_id;
+end;
+$$;
+
+revoke all on function private.migration_actor_id() from public,anon,authenticated;
+
+create or replace function public.acknowledge_import_warnings(import_batch_id uuid, expected_version integer)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare current_version integer;
+begin
+  if not private.migration_caller_allowed() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
+  select version into current_version from migration.import_batches where id=import_batch_id for update;
+  if not found then raise exception using errcode='P0002',message='IMPORT_BATCH_NOT_FOUND'; end if;
+  if current_version<>expected_version then raise exception using errcode='40001',message='VERSION_CONFLICT'; end if;
+  update migration.import_batches set status='approved',approved_at=now(),approved_by=private.migration_actor_id(),approval_note='Warnings acknowledged',version=version+1 where id=acknowledge_import_warnings.import_batch_id returning version into current_version;
+  return current_version;
+end;
+$$;
+
+revoke all on function public.acknowledge_import_warnings(uuid,integer) from public,anon;
+grant execute on function public.acknowledge_import_warnings(uuid,integer) to authenticated,service_role;
 
 create or replace function public.publish_import_batch(
   import_batch_id uuid,
@@ -21,7 +57,7 @@ set search_path = ''
 as $$
 declare
   batch migration.import_batches%rowtype;
-  actor_id uuid := auth.uid();
+  actor_id uuid := private.migration_actor_id();
   asset_row record;
   license_row record;
   resolved_site_id uuid;

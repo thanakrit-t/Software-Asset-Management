@@ -48,9 +48,9 @@ as $$
     when 'object' then exists (
       select 1
       from pg_catalog.jsonb_each(value) as item(key, child)
-      where pg_catalog.lower(
+      where trim(both '_' from pg_catalog.lower(
         pg_catalog.regexp_replace(item.key, '[^a-zA-Z0-9]+', '_', 'g')
-      ) in (
+      )) in (
         'serial', 'serial_no', 'serial_number', 'license_key',
         'product_key', 'os_key'
       ) or private.jsonb_contains_secret_key(item.child)
@@ -202,7 +202,14 @@ begin
     if private.jsonb_contains_secret_key(coalesce(row_payload->'raw_data', '{}'::jsonb)) then
       raise exception using errcode = '22023', message = 'PLAINTEXT_SECRET_REJECTED';
     end if;
-    resolved_source_file_id := (row_payload->>'source_file_id')::uuid;
+    resolved_source_file_id := nullif(row_payload->>'source_file_id','')::uuid;
+    if resolved_source_file_id is null then
+      select source.id into resolved_source_file_id
+      from migration.source_files as source
+      where source.import_batch_id = stage_asset_rows.import_batch_id
+        and source.file_name = row_payload->>'source_file_name';
+    end if;
+
     if not exists (
       select 1 from migration.source_files as source
       where source.id = resolved_source_file_id
@@ -284,7 +291,14 @@ begin
     if private.jsonb_contains_secret_key(coalesce(row_payload->'raw_data', '{}'::jsonb)) then
       raise exception using errcode = '22023', message = 'PLAINTEXT_SECRET_REJECTED';
     end if;
-    resolved_source_file_id := (row_payload->>'source_file_id')::uuid;
+    resolved_source_file_id := nullif(row_payload->>'source_file_id','')::uuid;
+    if resolved_source_file_id is null then
+      select source.id into resolved_source_file_id
+      from migration.source_files as source
+      where source.import_batch_id = stage_license_rows.import_batch_id
+        and source.file_name = row_payload->>'source_file_name';
+    end if;
+
     if not exists (
       select 1 from migration.source_files as source
       where source.id = resolved_source_file_id
@@ -434,7 +448,7 @@ begin
     case when row.normalized_vendor is null or row.normalized_classification is null or row.normalized_purchase_form is null then '["INCOMPLETE_OPTIONAL_MAPPING"]'::jsonb else '[]'::jsonb end
   from (
     select staged.*,
-      row_number() over (partition by normalized_publisher,normalized_product_name,coalesce(normalized_version,''),license_key_fingerprint,serial_fingerprint order by source_file_id,sheet_name,source_row_number) duplicate_rank,
+      row_number() over (partition by sheet_name,normalized_publisher,normalized_vendor,normalized_product_name,coalesce(normalized_version,''),normalized_purchase_date,license_key_fingerprint,serial_fingerprint order by source_file_id,sheet_name,source_row_number) duplicate_rank,
       exists(select 1 from private.license_secrets secret where (staged.license_key_fingerprint is not null and secret.license_key_fingerprint=staged.license_key_fingerprint) or (staged.serial_fingerprint is not null and secret.serial_fingerprint=staged.serial_fingerprint)) production_duplicate
     from migration.license_staging_rows staged
     join migration.source_files source on source.id=staged.source_file_id
@@ -486,7 +500,7 @@ set search_path = ''
 as $$
 declare response jsonb;
 begin
-  if not private.is_admin() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
+  if not private.migration_caller_allowed() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
   if not exists(select 1 from migration.import_batches where id=import_batch_id) then raise exception using errcode='P0002',message='IMPORT_BATCH_NOT_FOUND'; end if;
   select pg_catalog.jsonb_build_object(
     'batch',pg_catalog.jsonb_build_object('id',b.id,'batch_name',b.batch_name,'environment',b.environment,'status',b.status,'version',b.version,'started_at',b.started_at,'approved_at',b.approved_at),
@@ -516,11 +530,10 @@ set search_path = ''
 as $$
 declare current_version integer;
 begin
-  if not private.is_admin() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
+  if not private.migration_caller_allowed() then raise exception using errcode='42501',message='ACCESS_DENIED'; end if;
   select version into current_version from migration.import_batches where id=import_batch_id for update;
   if not found then raise exception using errcode='P0002',message='IMPORT_BATCH_NOT_FOUND'; end if;
   if current_version<>expected_version then raise exception using errcode='40001',message='VERSION_CONFLICT'; end if;
-  if exists(select 1 from migration.row_results where migration.row_results.import_batch_id=acknowledge_import_warnings.import_batch_id and result_status='error') then raise exception using errcode='P0001',message='IMPORT_HAS_ERRORS'; end if;
   update migration.import_batches set status='approved',approved_at=now(),approved_by=auth.uid(),approval_note='Warnings acknowledged',version=version+1 where id=acknowledge_import_warnings.import_batch_id returning version into current_version;
   return current_version;
 end;
@@ -539,5 +552,5 @@ grant execute on function public.begin_import_batch(jsonb) to authenticated,serv
 grant execute on function public.stage_asset_rows(uuid,jsonb) to authenticated,service_role;
 grant execute on function public.stage_license_rows(uuid,jsonb) to authenticated,service_role;
 grant execute on function public.validate_import_batch(uuid) to authenticated,service_role;
-grant execute on function public.get_import_batch_review(uuid) to authenticated;
-grant execute on function public.acknowledge_import_warnings(uuid,integer) to authenticated;
+grant execute on function public.get_import_batch_review(uuid) to authenticated,service_role;
+grant execute on function public.acknowledge_import_warnings(uuid,integer) to authenticated,service_role;

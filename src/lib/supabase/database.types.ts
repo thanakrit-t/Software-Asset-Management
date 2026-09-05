@@ -2752,6 +2752,10 @@ export type Database = {
       }
     }
     Functions: {
+      acknowledge_import_warnings: {
+        Args: { expected_version: number; import_batch_id: string }
+        Returns: number
+      }
       allocate_license: {
         Args: { payload: Json }
         Returns: {
@@ -2910,6 +2914,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      begin_import_batch: { Args: { payload: Json }; Returns: string }
       create_asset: {
         Args: { payload: Json }
         Returns: {
@@ -3021,6 +3026,24 @@ export type Database = {
       export_report: {
         Args: { filters: Json; report_type: string }
         Returns: Json[]
+      }
+      get_import_batch_review: {
+        Args: { import_batch_id: string }
+        Returns: Json
+      }
+      publish_import_batch: {
+        Args: {
+          acknowledge_warnings: boolean
+          expected_version: number
+          import_batch_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["import_publish_summary"]
+        SetofOptions: {
+          from: "*"
+          to: "import_publish_summary"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       release_license_allocation: {
         Args: {
@@ -3202,6 +3225,14 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      stage_asset_rows: {
+        Args: { import_batch_id: string; rows: Json }
+        Returns: number
+      }
+      stage_license_rows: {
+        Args: { import_batch_id: string; rows: Json }
+        Returns: number
+      }
       update_asset: {
         Args: { asset_id: string; expected_version: number; payload: Json }
         Returns: {
@@ -3349,6 +3380,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      validate_import_batch: {
+        Args: { import_batch_id: string }
+        Returns: Database["public"]["CompositeTypes"]["import_validation_summary"]
+        SetofOptions: {
+          from: "*"
+          to: "import_validation_summary"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       account_status: "active" | "inactive" | "locked"
@@ -3365,6 +3406,25 @@ export type Database = {
         | "mixed"
     }
     CompositeTypes: {
+      import_publish_summary: {
+        import_batch_id: string | null
+        assets_created: number | null
+        products_created: number | null
+        licenses_created: number | null
+        allocations_created: number | null
+        duplicate_rows_skipped: number | null
+        warning_rows_skipped: number | null
+        audit_event_id: string | null
+      }
+      import_validation_summary: {
+        import_batch_id: string | null
+        valid_count: number | null
+        warning_count: number | null
+        error_count: number | null
+        duplicate_count: number | null
+        skipped_count: number | null
+        version: number | null
+      }
       license_secret_reveal: {
         secret_type: string | null
         secret_value: string | null

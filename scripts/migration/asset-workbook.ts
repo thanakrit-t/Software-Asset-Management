@@ -50,22 +50,22 @@ const LAYOUTS: readonly SheetLayout[] = [
     headerRow: 5,
     dataRow: 6,
     columns: {
-      location: 2,
-      responsible: 6,
-      notebook: 8,
-      pc: 9,
-      assetCode: 10,
-      computerName: 11,
-      user: 12,
-      maker: 13,
-      model: 14,
-      purchaseDate: 15,
-      mac: [[16, "lan"], [17, "lan"], [18, "wifi"]],
-      ip: [[19, "lan"], [20, "lan"], [21, "wifi"]],
-      extraUsers: [25, 26, 27, 28],
-      workgroup: 29,
-      operatingSystem: 30,
-      remark: 62,
+      location: 1,
+      responsible: 5,
+      notebook: 7,
+      pc: 8,
+      assetCode: 9,
+      computerName: 10,
+      user: 11,
+      maker: 12,
+      model: 13,
+      purchaseDate: 14,
+      mac: [[15, "lan"], [16, "lan"], [17, "wifi"]],
+      ip: [[18, "lan"], [19, "lan"], [20, "wifi"]],
+      extraUsers: [24, 25, 26, 27],
+      workgroup: 28,
+      operatingSystem: 29,
+      remark: 61,
     },
   },
   {
@@ -75,18 +75,18 @@ const LAYOUTS: readonly SheetLayout[] = [
     headerRow: 6,
     dataRow: 7,
     columns: {
-      location: 2,
-      responsible: 6,
-      notebook: 8,
-      pc: 9,
-      assetCode: 10,
-      computerName: 11,
-      user: 12,
-      mac: [[13, "lan"], [14, "lan"], [15, "wifi"]],
-      ip: [[16, "lan"], [17, "lan"], [18, "wifi"]],
+      location: 1,
+      responsible: 5,
+      notebook: 7,
+      pc: 8,
+      assetCode: 9,
+      computerName: 10,
+      user: 11,
+      mac: [[12, "lan"], [13, "lan"], [14, "wifi"]],
+      ip: [[15, "lan"], [16, "lan"], [17, "wifi"]],
       extraUsers: [],
-      workgroup: 21,
-      operatingSystem: 22,
+      workgroup: 20,
+      operatingSystem: 21,
       remark: 0,
     },
   },
@@ -132,7 +132,7 @@ function parseSheet(
     const assetCode = textAt(row, layout.columns.assetCode).trim();
     const computerName = textAt(row, layout.columns.computerName).trim();
     const identity = assetCode || computerName;
-    const meaningful = rowHasMeaningfulSafeData(row, layout, softwareColumns);
+    const meaningful = rowHasAssetMarker(row, layout);
     if (!identity) {
       if (meaningful && !isTotalsOrNotesRow(row)) {
         result.issues.push(issue(
@@ -203,7 +203,7 @@ function appendNetwork(row: ExcelJS.Row, layout: SheetLayout, coordinate: Source
 }
 
 function appendPeople(row: ExcelJS.Row, layout: SheetLayout, coordinate: SourceCoordinate, businessKey: string, output: PersonAssignmentObservation[]): void {
-  const people: readonly [number, "user" | "responsible"][] = [
+  const people: ReadonlyArray<readonly [number, "user" | "responsible"]> = [
     [layout.columns.responsible, "responsible"],
     [layout.columns.user, "user"],
     ...layout.columns.extraUsers.map((column) => [column, "user"] as const),
@@ -247,9 +247,12 @@ function isPresent(value: string): boolean {
   return normalized !== "" && !["0", "false", "no", "n", "-"].includes(normalized);
 }
 
-function rowHasMeaningfulSafeData(row: ExcelJS.Row, layout: SheetLayout, softwareColumns: readonly [number, string][]): boolean {
-  const columns = [layout.columns.location, layout.columns.responsible, layout.columns.user, layout.columns.workgroup, layout.columns.operatingSystem, ...softwareColumns.map(([column]) => column)];
-  return columns.some((column) => textAt(row, column).trim() !== "");
+function rowHasAssetMarker(row: ExcelJS.Row, layout: SheetLayout): boolean {
+  return [layout.columns.notebook, layout.columns.pc].some((column) =>
+    ["x", "true", "yes", "y", "?", "?"].includes(
+      textAt(row, column).trim().toLowerCase(),
+    ),
+  );
 }
 
 function isTotalsOrNotesRow(row: ExcelJS.Row): boolean {

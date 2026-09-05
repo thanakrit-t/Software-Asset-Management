@@ -20,8 +20,9 @@ export function cellText(value: CellLikeValue): string {
     return String(resolved);
   }
   if (typeof resolved === "object") {
-    if ("richText" in resolved) {
-      return resolved.richText.map((fragment) => fragment.text).join("");
+    if ("richText" in resolved && Array.isArray(resolved.richText)) {
+      return resolved.richText.map((fragment: { text?: unknown }) =>
+        typeof fragment.text === "string" ? fragment.text : "").join("");
     }
     if ("text" in resolved && typeof resolved.text === "string") {
       return resolved.text;
