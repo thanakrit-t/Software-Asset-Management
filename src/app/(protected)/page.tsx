@@ -1,11 +1,11 @@
 import { DashboardScreen } from "@/features/dashboard/dashboard-screen";
-import { mockSamRepository } from "@/features/sam/mock-repository";
+import { getServerSamRepository } from "@/features/sam/server-repository";
 
-export default async function Home() {
+export default async function Home() { const repository = await getServerSamRepository();
   const [assets, licenses, notifications] = await Promise.all([
-    mockSamRepository.listAssets(),
-    mockSamRepository.listLicenses(),
-    mockSamRepository.listNotifications(),
+    repository.listAssets(),
+    repository.listLicenses(),
+    repository.listNotifications(),
   ]);
 
   return <DashboardScreen assets={assets} licenses={licenses} notifications={notifications} />;

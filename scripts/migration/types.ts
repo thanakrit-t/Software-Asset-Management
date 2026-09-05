@@ -120,9 +120,11 @@ export interface SecretFingerprinter {
 }
 
 export interface SourceDescriptor {
-  kind: "assets" | "licenses";
+  kind: "asset" | "license";
   fileName: string;
   fingerprint: string;
+  fileSizeBytes: number;
+  sourceModifiedAt: string;
 }
 
 export interface StagingGateway {
