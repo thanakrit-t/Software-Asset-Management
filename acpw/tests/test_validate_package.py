@@ -89,3 +89,17 @@ class ExecutionTemplateTests(unittest.TestCase):
                 self.assertEqual(required_headings_missing(Path("acpw/templates") / filename, headings), [])
 if __name__ == "__main__":
     unittest.main()
+
+class PromptSafetyTests(unittest.TestCase):
+    def test_master_prompt_contains_non_negotiable_controls(self):
+        text = Path("acpw/prompts/master-operating-prompt.md").read_text(encoding="utf-8")
+        required = [
+            "Hard Rules are evaluated before the weighted risk score",
+            "Do not scan the full repository by default",
+            "Do not bypass a required human approval gate",
+            "Stop and re-plan",
+            "Persist current state in the checkpoint",
+            "Parallelize only independent work",
+        ]
+        for phrase in required:
+            self.assertIn(phrase, text)
