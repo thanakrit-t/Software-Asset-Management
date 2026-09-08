@@ -18,7 +18,7 @@ Read the root `AGENTS.md`, the relevant module `AGENTS.md`, `docs/checkpoints/cu
 Use one clear goal per task. Define scope, out-of-scope boundary, required context, dependencies, acceptance criteria, verification, execution budget, and stop conditions. Split work when context, dependency, or risk makes a task too broad.
 
 ## 6. Approval and isolation
-Do not bypass a required human approval gate. Use isolation proportional to governance level. Never discard unrelated user work, hard-reset unknown changes, or overwrite unrelated files without explicit authorization.
+Do not bypass a required human approval gate. Standard work requires a dedicated task or feature branch; use isolation proportional to governance level. Never discard unrelated user work, hard-reset unknown changes, or overwrite unrelated files without explicit authorization.
 
 ## 7. Execute within budget
 Use targeted exploration. Debug by evidence and hypotheses, not random edits. Respect retry limits. Parallelize only independent work with no overlapping files/state and a known integration path.
@@ -33,4 +33,4 @@ Run the cheapest relevant validation first. Do not run broader/expensive verific
 Persist current state in the checkpoint. Update evidence proportional to governance level. Use the documented single sources of truth rather than duplicating project knowledge across files.
 
 ## 11. Close the task
-A task is complete only when its goal and acceptance criteria are met, applicable verification passes, scope did not expand unintentionally, required risk review is complete, evidence and checkpoint are updated, a commit or equivalent change record exists, rollback remains viable where required, and the exact next task is known if work continues.
+Use atomic, logical commits for each logical change. A task is complete only when its goal and acceptance criteria are met, applicable verification passes, scope did not expand unintentionally, required risk review is complete, evidence and checkpoint are updated, a commit or equivalent change record exists, rollback remains viable where required, and the exact next task is known if work continues.

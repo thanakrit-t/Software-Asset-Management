@@ -174,3 +174,20 @@ class SpecCoverageTests(unittest.TestCase):
                     path = package_root / artifact
                     self.assertTrue(path.is_file(), f"{area}: missing {path}")
                     self.assertGreater(path.stat().st_size, 0, f"{area}: empty {path}")
+
+
+class ReviewRemediationCoverageTests(unittest.TestCase):
+    def test_standard_work_requires_dedicated_task_or_feature_branch(self):
+        guidance = (
+            Path("acpw/templates/root-AGENTS.md").read_text(encoding="utf-8")
+            + Path("acpw/templates/change-standard.md").read_text(encoding="utf-8")
+            + Path("acpw/prompts/master-operating-prompt.md").read_text(encoding="utf-8")
+        )
+        self.assertRegex(guidance, r"(?i)Standard.{0,120}(dedicated task|feature) branch")
+
+    def test_commit_guidance_requires_atomic_logical_commits(self):
+        guidance = (
+            Path("acpw/templates/root-AGENTS.md").read_text(encoding="utf-8")
+            + Path("acpw/prompts/master-operating-prompt.md").read_text(encoding="utf-8")
+        )
+        self.assertRegex(guidance, r"(?i)atomic.{0,80}logical commit")
