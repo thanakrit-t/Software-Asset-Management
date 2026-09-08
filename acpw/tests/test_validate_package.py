@@ -54,9 +54,6 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(validate_project_policy(global_policy, raised), [])
         self.assertTrue(validate_project_policy(global_policy, lowered))
 
-
-if __name__ == "__main__":
-    unittest.main()
 from acpw.scripts.validate_package import required_headings_missing
 
 
@@ -75,3 +72,7 @@ class ContextTemplateTests(unittest.TestCase):
             ],
         )
         self.assertEqual(missing, [])
+
+if __name__ == "__main__":
+    unittest.main()
+
