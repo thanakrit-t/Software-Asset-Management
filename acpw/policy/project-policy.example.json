@@ -1,0 +1,9 @@
+{
+  "project": "example-project",
+  "minimum_governance": "Standard",
+  "hard_rules": {
+    "certificate_renewal": "Enterprise",
+    "normal_production_application_deployment": "Enterprise"
+  },
+  "notes": "Project policy may add stricter controls but must never lower the Global Baseline."
+}

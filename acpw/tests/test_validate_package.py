@@ -1,8 +1,16 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
-from acpw.scripts.validate_package import REQUIRED_FILES, main, required_files_missing
+from acpw.scripts.validate_package import (
+    REQUIRED_FILES,
+    load_json,
+    main,
+    required_files_missing,
+    validate_global_policy,
+    validate_project_policy,
+)
 
 
 class PackageCompletenessTests(unittest.TestCase):
@@ -23,6 +31,28 @@ class PackageCompletenessTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.touch()
             self.assertEqual(main([tmp]), 0)
+
+
+class PolicyTests(unittest.TestCase):
+    def test_global_policy_has_no_invariant_errors(self):
+        policy = load_json(Path("acpw/policy/global-baseline.json"))
+        self.assertEqual(validate_global_policy(policy), [])
+
+    def test_global_policy_rejects_wrong_weight_distribution_even_when_sum_is_100(self):
+        policy = {
+            "governance_order": ["Lightweight", "Standard", "Enterprise"],
+            "risk_weights": {"architecture": 20, "security": 25, "data": 25, "delivery": 20, "operations": 10},
+            "thresholds": {"Lightweight": [0, 29], "Standard": [30, 64], "Enterprise": [65, 100]},
+            "hard_rules": {}, "full_repository_scan_default": False,
+        }
+        self.assertTrue(validate_global_policy(policy))
+
+    def test_project_policy_may_raise_but_not_lower_a_hard_rule(self):
+        global_policy = {"governance_order": ["Lightweight", "Standard", "Enterprise"], "hard_rules": {"prod_deploy": "Standard"}}
+        raised = {"hard_rules": {"prod_deploy": "Enterprise"}}
+        lowered = {"hard_rules": {"prod_deploy": "Lightweight"}}
+        self.assertEqual(validate_project_policy(global_policy, raised), [])
+        self.assertTrue(validate_project_policy(global_policy, lowered))
 
 
 if __name__ == "__main__":

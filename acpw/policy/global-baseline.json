@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "governance_order": ["Lightweight", "Standard", "Enterprise"],
+  "risk_weights": {
+    "architecture": 25,
+    "security": 25,
+    "data": 20,
+    "delivery": 20,
+    "operations": 10
+  },
+  "thresholds": {
+    "Lightweight": [0, 29],
+    "Standard": [30, 64],
+    "Enterprise": [65, 100]
+  },
+  "hard_rules": {
+    "production_database_schema_migration": "Enterprise",
+    "destructive_mass_data_modification": "Enterprise",
+    "production_data_restore": "Enterprise",
+    "disaster_recovery_or_failover": "Enterprise",
+    "core_firewall_routing_or_critical_vpn_change": "Enterprise",
+    "privileged_iam_change": "Enterprise",
+    "private_or_encryption_key_rotation": "Enterprise",
+    "production_cicd_control_plane_change": "Enterprise",
+    "critical_filesystem_or_storage_change": "Enterprise",
+    "production_secrets_migration": "Enterprise",
+    "irreversible_production_operation": "Enterprise",
+    "normal_production_application_deployment": "Standard",
+    "production_configuration_change": "Standard",
+    "non_core_firewall_rule_change": "Standard",
+    "normal_user_permission_change": "Standard",
+    "certificate_renewal": "Standard",
+    "backup_policy_or_configuration_change": "Standard",
+    "normal_os_or_server_configuration_change": "Standard",
+    "standard_cicd_modification": "Standard",
+    "dns_load_balancer_or_reverse_proxy_change": "Standard"
+  },
+  "approval_gates": {
+    "Lightweight": ["plan_approval"],
+    "Standard": ["plan_approval", "release_or_deployment_approval"],
+    "Enterprise": ["design_or_change_plan_approval", "pre_deployment_approval"]
+  },
+  "retry_budget": {"Lightweight": 2, "Standard": 3, "Enterprise": 3},
+  "full_repository_scan_default": false
+}
