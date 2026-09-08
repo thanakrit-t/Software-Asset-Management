@@ -148,3 +148,29 @@ class DocumentationTests(unittest.TestCase):
             "Do not weaken the Global Baseline",
         ]:
             self.assertIn(phrase, text)
+
+
+class SpecCoverageTests(unittest.TestCase):
+    def test_each_design_area_maps_to_a_shipped_artifact(self):
+        coverage = {
+            "Governance + Hard Rules": ["policy/global-baseline.json", "prompts/master-operating-prompt.md"],
+            "Reasoning Routing": ["prompts/master-operating-prompt.md", "templates/root-AGENTS.md"],
+            "Layered Context": ["templates/root-AGENTS.md", "templates/module-AGENTS.md", "prompts/session-start.md"],
+            "Task Slicing/Budget/Stops": ["templates/task.md", "prompts/master-operating-prompt.md"],
+            "Parallelism": ["prompts/master-operating-prompt.md"],
+            "Isolation": ["templates/root-AGENTS.md", "templates/change-standard.md", "templates/change-enterprise.md"],
+            "Verification Pyramid": ["templates/root-AGENTS.md", "templates/change-standard.md", "templates/change-enterprise.md", "docs/verification-plan.md"],
+            "Checkpoint": ["templates/checkpoint.md", "prompts/session-start.md", "prompts/session-end.md"],
+            "Evidence": ["templates/evidence-lightweight.md", "templates/evidence-standard.md", "templates/evidence-enterprise.md"],
+            "Single Source of Truth": ["templates/root-AGENTS.md"],
+            "Commit / DoD": ["templates/root-AGENTS.md", "prompts/master-operating-prompt.md"],
+            "Rollout / Adoption": ["README.md", "docs/rollout-checklist.md"],
+            "Workflow Self-Verification": ["tests/test_validate_package.py", "scripts/validate_package.py", "docs/verification-plan.md"],
+        }
+        package_root = Path("acpw")
+        for area, artifacts in coverage.items():
+            with self.subTest(area=area):
+                for artifact in artifacts:
+                    path = package_root / artifact
+                    self.assertTrue(path.is_file(), f"{area}: missing {path}")
+                    self.assertGreater(path.stat().st_size, 0, f"{area}: empty {path}")
