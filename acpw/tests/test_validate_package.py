@@ -73,5 +73,19 @@ class ContextTemplateTests(unittest.TestCase):
         )
         self.assertEqual(missing, [])
 
+TEMPLATE_REQUIREMENTS = {
+    "task.md": ["# Task ID", "# Goal", "# In Scope", "# Out of Scope", "# Acceptance Criteria", "# Execution Budget", "# Stop Conditions"],
+    "checkpoint.md": ["# Project", "# Task ID", "# Current State", "# Tests Performed", "# Next Task", "# Do Not Re-read", "# Rollback Point"],
+    "risk-assessment.md": ["# Hard Rule Check", "# Weighted Risk Score", "# Final Governance Level", "# Reasoning Level"],
+    "change-standard.md": ["# Scope", "# Rollback Note", "# Release / Deployment Approval"],
+    "change-enterprise.md": ["# Risk Assessment", "# Impact Assessment", "# Rollback Plan", "# Pre-Deployment Approval", "# Post-Change Verification"],
+}
+
+
+class ExecutionTemplateTests(unittest.TestCase):
+    def test_execution_templates_contain_required_sections(self):
+        for filename, headings in TEMPLATE_REQUIREMENTS.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(required_headings_missing(Path("acpw/templates") / filename, headings), [])
 if __name__ == "__main__":
     unittest.main()
