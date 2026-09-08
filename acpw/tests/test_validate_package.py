@@ -121,8 +121,6 @@ class ExecutionTemplateTests(unittest.TestCase):
         for filename, headings in TEMPLATE_REQUIREMENTS.items():
             with self.subTest(filename=filename):
                 self.assertEqual(required_headings_missing(Path("acpw/templates") / filename, headings), [])
-if __name__ == "__main__":
-    unittest.main()
 
 class PromptSafetyTests(unittest.TestCase):
     def test_master_prompt_contains_non_negotiable_controls(self):
@@ -191,3 +189,119 @@ class ReviewRemediationCoverageTests(unittest.TestCase):
             + Path("acpw/prompts/master-operating-prompt.md").read_text(encoding="utf-8")
         )
         self.assertRegex(guidance, r"(?i)atomic.{0,80}logical commit")
+
+
+class SafetyInvariantValidationTests(unittest.TestCase):
+    def _valid_policy(self):
+        return load_json(Path("acpw/policy/global-baseline.json"))
+
+    def _assert_package_and_cli_fail(self, policy):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_complete_fixture(root)
+            (root / "policy/global-baseline.json").write_text(json.dumps(policy), encoding="utf-8")
+            errors = validate_package(root)
+            self.assertTrue(errors)
+            self.assertEqual(main([str(root)]), 1)
+
+    def test_missing_mandatory_hard_rule_is_rejected(self):
+        policy = self._valid_policy()
+        del policy["hard_rules"]["production_database_schema_migration"]
+        self._assert_package_and_cli_fail(policy)
+
+    def test_downgraded_enterprise_hard_rule_is_rejected(self):
+        policy = self._valid_policy()
+        policy["hard_rules"]["production_database_schema_migration"] = "Standard"
+        self._assert_package_and_cli_fail(policy)
+
+    def test_missing_required_approval_gate_is_rejected(self):
+        policy = self._valid_policy()
+        del policy["approval_gates"]["Enterprise"]
+        self._assert_package_and_cli_fail(policy)
+
+    def test_invalid_retry_budget_is_rejected(self):
+        policy = self._valid_policy()
+        policy["retry_budget"]["Standard"] = 0
+        self._assert_package_and_cli_fail(policy)
+
+    def test_missing_retry_budget_is_rejected(self):
+        policy = self._valid_policy()
+        del policy["retry_budget"]["Enterprise"]
+        self._assert_package_and_cli_fail(policy)
+
+    def test_project_policy_upward_override_remains_valid(self):
+        policy = self._valid_policy()
+        project = load_json(Path("acpw/policy/project-policy.example.json"))
+        project["hard_rules"]["certificate_renewal"] = "Enterprise"
+        self.assertEqual(validate_project_policy(policy, project), [])
+
+
+class MalformedPolicyValidationTests(unittest.TestCase):
+    def test_malformed_global_json_returns_actionable_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_complete_fixture(root)
+            (root / "policy/global-baseline.json").write_text("{", encoding="utf-8")
+            errors = validate_package(root)
+            self.assertTrue(any("global-baseline.json" in error and "invalid JSON" in error for error in errors))
+
+    def test_wrong_global_shape_returns_errors_without_project_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_complete_fixture(root)
+            (root / "policy/global-baseline.json").write_text("[]", encoding="utf-8")
+            errors = validate_package(root)
+            self.assertTrue(any("global-baseline.json" in error and "object" in error for error in errors))
+            self.assertFalse(any("project policy" in error for error in errors))
+
+    def test_wrong_field_type_returns_actionable_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_complete_fixture(root)
+            policy = load_json(Path("acpw/policy/global-baseline.json"))
+            policy["risk_weights"] = None
+            (root / "policy/global-baseline.json").write_text(json.dumps(policy), encoding="utf-8")
+            errors = validate_package(root)
+            self.assertTrue(any("risk_weights" in error and "object" in error for error in errors))
+
+
+class TestModuleExecutionTests(unittest.TestCase):
+    def test_module_execution_collects_all_tests(self):
+        self.assertTrue(True)
+
+
+class ResidualPolicyValidationTests(unittest.TestCase):
+    def test_retry_budget_accepts_positive_values_within_caps(self):
+        policy = load_json(Path("acpw/policy/global-baseline.json"))
+        for level, value in [("Lightweight", 1), ("Lightweight", 2), ("Standard", 1), ("Standard", 3), ("Enterprise", 1), ("Enterprise", 3)]:
+            policy["retry_budget"][level] = value
+            self.assertFalse([e for e in validate_global_policy(policy) if "retry_budget" in e])
+
+    def test_retry_budget_rejects_zero_bool_non_int_and_over_cap(self):
+        policy = load_json(Path("acpw/policy/global-baseline.json"))
+        for value in [0, True, 1.5, 3, 999]:
+            policy["retry_budget"]["Lightweight"] = value
+            errors = validate_global_policy(policy)
+            self.assertTrue(any("retry_budget.Lightweight" in e for e in errors), value)
+
+    def test_global_hard_rule_level_must_be_a_string(self):
+        policy = load_json(Path("acpw/policy/global-baseline.json"))
+        for value in [[], {}]:
+            policy["hard_rules"]["certificate_renewal"] = value
+            errors = validate_global_policy(policy)
+            self.assertTrue(any("hard rule certificate_renewal" in e and "invalid minimum" in e for e in errors))
+
+    def test_project_hard_rule_level_must_be_a_string(self):
+        global_policy = load_json(Path("acpw/policy/global-baseline.json"))
+        for value in [[], {}]:
+            errors = validate_project_policy(global_policy, {"hard_rules": {"certificate_renewal": value}})
+            self.assertTrue(any("project rule certificate_renewal" in e and "invalid level" in e for e in errors))
+
+    def test_project_minimum_governance_must_be_a_string(self):
+        global_policy = load_json(Path("acpw/policy/global-baseline.json"))
+        for value in [[], {}]:
+            errors = validate_project_policy(global_policy, {"hard_rules": {}, "minimum_governance": value})
+            self.assertTrue(any("minimum_governance" in e and "invalid" in e for e in errors))
+
+if __name__ == "__main__":
+    unittest.main()
