@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from acpw.scripts.validate_package import REQUIRED_FILES, required_files_missing
+from acpw.scripts.validate_package import REQUIRED_FILES, main, required_files_missing
 
 
 class PackageCompletenessTests(unittest.TestCase):
