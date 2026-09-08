@@ -137,3 +137,14 @@ class PromptSafetyTests(unittest.TestCase):
         ]
         for phrase in required:
             self.assertIn(phrase, text)
+
+class DocumentationTests(unittest.TestCase):
+    def test_readme_contains_minimum_adoption_path(self):
+        text = Path("acpw/README.md").read_text(encoding="utf-8")
+        for phrase in [
+            "Validate the ACPW package",
+            "Copy the root AGENTS template",
+            "Create the current checkpoint",
+            "Do not weaken the Global Baseline",
+        ]:
+            self.assertIn(phrase, text)
