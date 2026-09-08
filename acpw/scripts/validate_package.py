@@ -96,3 +96,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def required_headings_missing(path: Path, headings: list[str]) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    return [heading for heading in headings if heading not in text]

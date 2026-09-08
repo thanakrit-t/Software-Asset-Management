@@ -57,3 +57,21 @@ class PolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+from acpw.scripts.validate_package import required_headings_missing
+
+
+class ContextTemplateTests(unittest.TestCase):
+    def test_root_agents_contains_required_sections(self):
+        missing = required_headings_missing(
+            Path("acpw/templates/root-AGENTS.md"),
+            [
+                "# Project Purpose",
+                "# Global Architecture",
+                "# ACPW Governance",
+                "# Context Loading Rules",
+                "# Security Baseline",
+                "# Verification Commands",
+                "# Definition of Done",
+            ],
+        )
+        self.assertEqual(missing, [])
