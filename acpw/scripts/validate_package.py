@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import sys
 
 REQUIRED_FILES = [
     "README.md",
@@ -20,6 +21,16 @@ REQUIRED_FILES = [
     "prompts/session-end.md",
     "docs/rollout-checklist.md",
     "docs/verification-plan.md",
+]
+
+ROOT_AGENT_HEADINGS = [
+    "# Project Purpose",
+    "# Global Architecture",
+    "# ACPW Governance",
+    "# Context Loading Rules",
+    "# Security Baseline",
+    "# Verification Commands",
+    "# Definition of Done",
 ]
 
 
@@ -80,24 +91,51 @@ def required_files_missing(root: Path) -> list[str]:
     return [path for path in REQUIRED_FILES if not (root / path).is_file()]
 
 
-def main(argv: list[str] | None = None) -> int:
-    import argparse
+def required_headings_missing(path: Path, headings: list[str]) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    return [heading for heading in headings if heading not in text]
 
-    parser = argparse.ArgumentParser(description="Validate ACPW package completeness")
-    parser.add_argument("root", nargs="?", default=".", type=Path)
-    args = parser.parse_args(argv)
-    missing = required_files_missing(args.root)
-    if missing:
-        for path in missing:
-            print(path)
+
+def validate_package(root: Path) -> list[str]:
+    errors: list[str] = []
+    for missing in required_files_missing(root):
+        errors.append(f"missing required file: {missing}")
+    if errors:
+        return errors
+
+    global_policy = load_json(root / "policy/global-baseline.json")
+    project_policy = load_json(root / "policy/project-policy.example.json")
+    errors.extend(validate_global_policy(global_policy))
+    errors.extend(validate_project_policy(global_policy, project_policy))
+
+    for heading in required_headings_missing(root / "templates/root-AGENTS.md", ROOT_AGENT_HEADINGS):
+        errors.append(f"root-AGENTS missing heading: {heading}")
+
+    master_prompt = (root / "prompts/master-operating-prompt.md").read_text(encoding="utf-8")
+    for phrase in [
+        "Hard Rules are evaluated before the weighted risk score",
+        "Do not scan the full repository by default",
+        "Do not bypass a required human approval gate",
+        "Stop and re-plan",
+        "Persist current state in the checkpoint",
+        "Parallelize only independent work",
+    ]:
+        if phrase not in master_prompt:
+            errors.append(f"master prompt missing safety phrase: {phrase}")
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    root = Path(args[0]) if args else Path("acpw")
+    errors = validate_package(root)
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}")
         return 1
+    print(f"ACPW package valid: {root}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-def required_headings_missing(path: Path, headings: list[str]) -> list[str]:
-    text = path.read_text(encoding="utf-8")
-    return [heading for heading in headings if heading not in text]

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+import shutil
 from pathlib import Path
 
 from acpw.scripts.validate_package import (
@@ -8,9 +9,21 @@ from acpw.scripts.validate_package import (
     load_json,
     main,
     required_files_missing,
+    validate_package,
     validate_global_policy,
     validate_project_policy,
 )
+
+def create_complete_fixture(root: Path) -> None:
+    source = Path('acpw')
+    for relative_path in REQUIRED_FILES:
+        target = root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source_path = source / relative_path
+        if source_path.is_file():
+            shutil.copyfile(source_path, target)
+        else:
+            target.write_text("fixture\n", encoding="utf-8")
 
 
 class PackageCompletenessTests(unittest.TestCase):
@@ -26,11 +39,21 @@ class PackageCompletenessTests(unittest.TestCase):
     def test_cli_returns_zero_for_complete_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for relative_path in REQUIRED_FILES:
-                target = root / relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.touch()
+            create_complete_fixture(root)
             self.assertEqual(main([tmp]), 0)
+
+
+class EndToEndValidationTests(unittest.TestCase):
+    def test_complete_fixture_validates_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_complete_fixture(root)
+            self.assertEqual(validate_package(root), [])
+
+    def test_missing_required_file_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = validate_package(Path(tmp))
+            self.assertTrue(any('missing required file' in error for error in errors))
 
 
 class PolicyTests(unittest.TestCase):
