@@ -44,11 +44,12 @@ def validate_global_policy(policy: dict) -> list[str]:
     if policy.get("governance_order") != ["Lightweight", "Standard", "Enterprise"]:
         errors.append("governance_order must be Lightweight, Standard, Enterprise")
     expected_weights = {
-        "architecture": 25,
         "security": 25,
-        "data": 20,
-        "delivery": 20,
-        "operations": 10,
+        "data_production": 25,
+        "blast_radius": 20,
+        "reversibility": 15,
+        "business_operational_impact": 10,
+        "complexity": 5,
     }
     weights = policy.get("risk_weights", {})
     if sum(weights.values()) != 100:

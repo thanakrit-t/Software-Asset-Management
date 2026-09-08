@@ -2,11 +2,12 @@
   "version": "1.0",
   "governance_order": ["Lightweight", "Standard", "Enterprise"],
   "risk_weights": {
-    "architecture": 25,
     "security": 25,
-    "data": 20,
-    "delivery": 20,
-    "operations": 10
+    "data_production": 25,
+    "blast_radius": 20,
+    "reversibility": 15,
+    "business_operational_impact": 10,
+    "complexity": 5
   },
   "thresholds": {
     "Lightweight": [0, 29],
