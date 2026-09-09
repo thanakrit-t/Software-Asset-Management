@@ -93,11 +93,7 @@ rename to publish_import_batch_core;
 revoke all on function public.publish_import_batch_core(uuid, integer, boolean)
 from public, anon, authenticated, service_role;
 
-create or replace function public.publish_import_batch(
-  import_batch_id uuid,
-  expected_version integer,
-  acknowledge_warnings boolean
-)
+create or replace function private.publish_asset_relations(import_batch_id uuid)
 returns public.import_publish_summary
 language plpgsql
 security definer
@@ -121,12 +117,7 @@ declare
   location_label text;
   operating_system_label text;
 begin
-  select * into result
-  from public.publish_import_batch_core(
-    import_batch_id,
-    expected_version,
-    acknowledge_warnings
-  );
+  result.products_created := 0;
 
   for asset_row in
     select
@@ -137,7 +128,7 @@ begin
     from public.assets as asset
     join migration.asset_staging_rows as staged
       on staged.id = asset.migration_source_row_id
-    where asset.migration_batch_id = publish_import_batch.import_batch_id
+    where asset.migration_batch_id = publish_asset_relations.import_batch_id
     order by staged.sheet_name, staged.source_row_number
   loop
     actor_id := asset_row.created_by;
@@ -479,6 +470,224 @@ begin
       end if;
     end loop;
   end loop;
+
+  insert into migration.reconciliation_totals (
+    reconciliation_run_id, metric, site_id, source_total, target_total, status
+  )
+  with imported_assets as (
+    select asset.id, asset.site_id, staged.raw_data
+    from public.assets as asset
+    join migration.asset_staging_rows as staged on staged.id = asset.migration_source_row_id
+    where asset.migration_batch_id = publish_asset_relations.import_batch_id
+  ),
+  people_ranked as (
+    select imported.id as asset_id, imported.site_id,
+      pg_catalog.btrim(item.value->>'person_label') as person_label,
+      item.value->>'assignment_kind' as assignment_kind,
+      pg_catalog.row_number() over (
+        partition by imported.id, item.value->>'assignment_kind' order by item.ordinality
+      ) as assignment_index
+    from imported_assets as imported
+    cross join lateral pg_catalog.jsonb_array_elements(
+      case when pg_catalog.jsonb_typeof(imported.raw_data->'people_assignments') = 'array'
+        then imported.raw_data->'people_assignments' else '[]'::jsonb end
+    ) with ordinality as item(value, ordinality)
+    where nullif(pg_catalog.btrim(item.value->>'person_label'), '') is not null
+  ),
+  network_observations as (
+    select imported.id as asset_id, imported.site_id,
+      case when pg_catalog.lower(coalesce(item.value->>'interface_name', '')) in ('lan','wifi')
+        then pg_catalog.lower(item.value->>'interface_name') else 'other' end as interface_type,
+      item.value->>'kind' as observation_kind,
+      item.value->>'value' as observation_value,
+      pg_catalog.row_number() over (
+        partition by imported.id,
+          pg_catalog.lower(coalesce(item.value->>'interface_name', 'other')),
+          item.value->>'kind' order by item.ordinality
+      ) as interface_slot
+    from imported_assets as imported
+    cross join lateral pg_catalog.jsonb_array_elements(
+      case when pg_catalog.jsonb_typeof(imported.raw_data->'network_data') = 'array'
+        then imported.raw_data->'network_data' else '[]'::jsonb end
+    ) with ordinality as item(value, ordinality)
+    where item.value->>'kind' in ('mac','ip')
+  ),
+  network_pairs as (
+    select asset_id, site_id, interface_type, interface_slot,
+      case
+        when pg_catalog.upper(pg_catalog.replace(pg_catalog.btrim(coalesce(
+          pg_catalog.max(observation_value) filter (where observation_kind='mac'), ''
+        )), '-', ':')) ~ '^[0-9A-F]{2}(:[0-9A-F]{2}){5}$'
+        then pg_catalog.upper(pg_catalog.replace(pg_catalog.btrim(
+          pg_catalog.max(observation_value) filter (where observation_kind='mac')
+        ), '-', ':'))
+      end as normalized_mac,
+      case
+        when pg_catalog.pg_input_is_valid(pg_catalog.btrim(coalesce(
+          pg_catalog.max(observation_value) filter (where observation_kind='ip'), ''
+        )), 'inet')
+        then pg_catalog.btrim(pg_catalog.max(observation_value) filter (where observation_kind='ip'))
+      end as normalized_ip
+    from network_observations
+    group by asset_id, site_id, interface_type, interface_slot
+  ),
+  network_ranked as (
+    select pair.*,
+      case when pair.normalized_mac is null then null else
+        pg_catalog.row_number() over (partition by pair.normalized_mac order by pair.asset_id, pair.interface_type, pair.interface_slot)
+      end as mac_rank
+    from network_pairs as pair
+  ),
+  source_totals as (
+    select site_id, 'location_links'::text as metric, count(*)::numeric as total
+    from imported_assets where nullif(pg_catalog.btrim(raw_data->>'location'), '') is not null group by site_id
+    union all
+    select site_id, 'operating_system_links', count(*)::numeric
+    from imported_assets where nullif(pg_catalog.btrim(raw_data->>'operating_system'), '') is not null group by site_id
+    union all
+    select site_id, 'person_assignments', count(*)::numeric from (
+      select distinct asset_id, site_id, person_label,
+        case when assignment_kind='responsible' and assignment_index=1 then 'responsible_person'
+          when assignment_kind='user' and assignment_index=1 then 'primary_user' else 'additional_user' end as role
+      from people_ranked
+    ) as assignments group by site_id
+    union all
+    select site_id, 'software_installations', count(*)::numeric from (
+      select distinct imported.id as asset_id, imported.site_id,
+        pg_catalog.lower(pg_catalog.btrim(item.value->>'product_label')) as product_label
+      from imported_assets as imported
+      cross join lateral pg_catalog.jsonb_array_elements(
+        case when pg_catalog.jsonb_typeof(imported.raw_data->'installed_software')='array'
+          then imported.raw_data->'installed_software' else '[]'::jsonb end
+      ) as item(value)
+      where nullif(pg_catalog.btrim(item.value->>'product_label'), '') is not null
+    ) as installations group by site_id
+    union all
+    select site_id, 'network_interfaces', count(*)::numeric
+    from network_ranked as network
+    where network.normalized_ip is not null or (
+      network.normalized_mac is not null and network.mac_rank=1 and not exists (
+        select 1 from public.asset_network_interfaces as interface
+        join public.assets as existing_asset on existing_asset.id=interface.asset_id
+        where interface.mac_address=network.normalized_mac and interface.archived_at is null
+          and existing_asset.migration_batch_id is distinct from publish_asset_relations.import_batch_id
+      )
+    ) group by site_id
+  ),
+  target_totals as (
+    select asset.site_id, 'network_interfaces'::text as metric, count(*)::numeric as total
+    from public.asset_network_interfaces as relation join public.assets as asset on asset.id=relation.asset_id
+    where asset.migration_batch_id=publish_asset_relations.import_batch_id and relation.archived_at is null group by asset.site_id
+    union all
+    select asset.site_id, 'person_assignments', count(*)::numeric
+    from public.asset_person_assignments as relation join public.assets as asset on asset.id=relation.asset_id
+    where asset.migration_batch_id=publish_asset_relations.import_batch_id and relation.archived_at is null group by asset.site_id
+    union all
+    select asset.site_id, 'software_installations', count(*)::numeric
+    from public.asset_software_installations as relation join public.assets as asset on asset.id=relation.asset_id
+    where asset.migration_batch_id=publish_asset_relations.import_batch_id and relation.archived_at is null group by asset.site_id
+    union all
+    select site_id, 'operating_system_links', count(*)::numeric from public.assets
+    where migration_batch_id=publish_asset_relations.import_batch_id and operating_system_product_id is not null group by site_id
+    union all
+    select site_id, 'location_links', count(*)::numeric from public.assets
+    where migration_batch_id=publish_asset_relations.import_batch_id and location_id is not null group by site_id
+  ),
+  metric_names(metric) as (values
+    ('network_interfaces'::text), ('person_assignments'), ('software_installations'),
+    ('operating_system_links'), ('location_links')
+  )
+  select
+    run.id,
+    metric_names.metric,
+    site.id,
+    coalesce(source.total, 0),
+    coalesce(target.total, 0),
+    case when coalesce(source.total, 0)=coalesce(target.total, 0) then 'matched' else 'mismatch' end
+  from migration.reconciliation_runs as run
+  cross join public.sites as site
+  cross join metric_names
+  left join source_totals as source on source.site_id=site.id and source.metric=metric_names.metric
+  left join target_totals as target on target.site_id=site.id and target.metric=metric_names.metric
+  where run.import_batch_id = publish_asset_relations.import_batch_id
+  on conflict (reconciliation_run_id, metric, site_id) do update
+  set source_total = excluded.source_total,
+      target_total = excluded.target_total,
+      status = excluded.status;
+
+  return result;
+end;
+$$;
+
+revoke all on function private.publish_asset_relations(uuid)
+from public, anon, authenticated;
+
+create or replace function private.complete_asset_publish_before_audit()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  relation_result public.import_publish_summary;
+begin
+  if new.action <> 'publish' or new.entity_type <> 'import_batch' then
+    return new;
+  end if;
+
+  select * into relation_result
+  from private.publish_asset_relations(new.entity_id);
+
+  new.new_values := coalesce(new.new_values, '{}'::jsonb) || pg_catalog.jsonb_build_object(
+    'products_created', coalesce((new.new_values->>'products_created')::integer, 0)
+      + coalesce(relation_result.products_created, 0),
+    'network_interfaces_created', (
+      select count(*) from public.asset_network_interfaces as interface
+      join public.assets as asset on asset.id = interface.asset_id
+      where asset.migration_batch_id = new.entity_id and interface.archived_at is null
+    ),
+    'person_assignments_created', (
+      select count(*) from public.asset_person_assignments as assignment
+      join public.assets as asset on asset.id = assignment.asset_id
+      where asset.migration_batch_id = new.entity_id and assignment.archived_at is null
+    ),
+    'software_installations_created', (
+      select count(*) from public.asset_software_installations as installation
+      join public.assets as asset on asset.id = installation.asset_id
+      where asset.migration_batch_id = new.entity_id and installation.archived_at is null
+    )
+  );
+  return new;
+end;
+$$;
+
+revoke all on function private.complete_asset_publish_before_audit()
+from public, anon, authenticated;
+
+create trigger audit_asset_publish_relations_trg
+before insert on audit.audit_events
+for each row execute function private.complete_asset_publish_before_audit();
+
+create or replace function public.publish_import_batch(
+  import_batch_id uuid,
+  expected_version integer,
+  acknowledge_warnings boolean
+)
+returns public.import_publish_summary
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  result public.import_publish_summary;
+begin
+  select * into result
+  from public.publish_import_batch_core(import_batch_id, expected_version, acknowledge_warnings);
+
+  select coalesce((event.new_values->>'products_created')::integer, result.products_created)
+  into result.products_created
+  from audit.audit_events as event
+  where event.id = result.audit_event_id;
 
   return result;
 end;

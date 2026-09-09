@@ -1,6 +1,6 @@
 begin;
 
-select plan(24);
+select plan(29);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -18,6 +18,12 @@ values (
 update public.profiles
 set app_role = 'admin'
 where id = '41000000-0000-4000-8000-000000000001';
+
+select vault.create_secret(
+  'pgTAP-license-only-pepper',
+  'sam_license_fingerprint_pepper',
+  'Asset-only migration test fixture'
+);
 
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
@@ -200,6 +206,21 @@ select is(
   'Asset-only publication writes one audit event'
 );
 select is(
+  (select (new_values->>'products_created')::integer from audit.audit_events where entity_type = 'import_batch' and entity_id = current_setting('test.asset_only_batch_id')::uuid and action = 'publish'),
+  3,
+  'publish audit includes products created by complete Asset publication'
+);
+select is(
+  (select pg_catalog.jsonb_object_agg(total.metric, pg_catalog.jsonb_build_object('source', total.source_total, 'target', total.target_total, 'status', total.status))
+   from migration.reconciliation_totals as total
+   join migration.reconciliation_runs as run on run.id = total.reconciliation_run_id
+   where run.import_batch_id = current_setting('test.asset_only_batch_id')::uuid
+     and total.site_id = '01000000-0000-4000-8000-000000000001'
+     and total.metric in ('network_interfaces','person_assignments','software_installations','operating_system_links','location_links')),
+  '{"network_interfaces":{"source":2,"target":2,"status":"matched"},"person_assignments":{"source":4,"target":4,"status":"matched"},"software_installations":{"source":2,"target":2,"status":"matched"},"operating_system_links":{"source":1,"target":1,"status":"matched"},"location_links":{"source":1,"target":1,"status":"matched"}}'::jsonb,
+  'Asset reconciliation independently matches exact staged and published nested totals'
+);
+select is(
   (select status::text from migration.import_batches where id = current_setting('test.asset_only_batch_id')::uuid),
   'committed',
   'Asset-only batch is marked committed last'
@@ -209,6 +230,32 @@ select is(
   0,
   'Asset-only publication creates no License entitlement'
 );
+
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select set_config('test.license_only_batch_id', (select id::text from migration.import_batches where batch_name = 'pgTAP License-only fixture'), true);
+select lives_ok(
+  $$ select public.stage_license_rows(current_setting('test.license_only_batch_id')::uuid, jsonb_build_array(jsonb_build_object(
+    'source_file_name', '03 Lisense list software thaikurabo factory office Update 2026-08-28.xlsx',
+    'sheet_name', 'Software License FACTORY', 'source_row_number', 9,
+    'source_row_hash', repeat('7', 64), 'raw_data', jsonb_build_object('label','license-only'),
+    'normalized_publisher', 'License-only Publisher', 'normalized_vendor', 'License-only Vendor',
+    'normalized_product_name', 'License-only Product', 'normalized_version', '1',
+    'normalized_classification', 'Commercial', 'normalized_purchase_form', 'Perpetual',
+    'normalized_owned_quantity', 1, 'normalized_record_status', 'active'
+  ))) $$,
+  'License-only CLI-compatible payload stages after Asset-only publication'
+);
+select lives_ok(
+  $$ select public.validate_import_batch(current_setting('test.license_only_batch_id')::uuid) $$,
+  'License-only batch validates after Asset-only publication'
+);
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"41000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select lives_ok(
+  $$ select public.publish_import_batch(current_setting('test.license_only_batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.license_only_batch_id')::uuid)->'batch'->>'version')::integer), false) $$,
+  'License-only batch publishes after Asset-only publication'
+);
+reset role;
 select throws_ok(
   $$ select public.begin_import_batch(jsonb_build_object(
     'batch_name', 'duplicate Asset-only fixture',
