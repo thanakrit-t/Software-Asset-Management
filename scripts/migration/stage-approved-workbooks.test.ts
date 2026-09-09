@@ -18,6 +18,46 @@ import type {
 } from "./types";
 
 describe("approved workbook staging orchestration", () => {
+  test("assets-only mode stages only the approved Asset workbook", async () => {
+    const gateway = fakeGateway();
+    const licenseParser = vi.fn(async (): Promise<ParsedLicenseWorkbook> => {
+      throw new Error("License parser must not run in assets-only mode");
+    });
+
+    const result = await stageApprovedWorkbooks({
+      dryRun: false,
+      sourceSelection: "assets-only",
+      paths: {
+        assets: "02 203Total License(TKC) Update 2026-08-28.xlsx",
+        licenses: "03 Lisense list software thaikurabo factory office Update 2026-08-28.xlsx",
+      },
+      gateway,
+      assetParser: async () => ({
+        sourceFile: "02 203Total License(TKC) Update 2026-08-28.xlsx",
+        sourceFingerprint: "1".repeat(64),
+        assets: [asset(0)],
+        networkData: [],
+        peopleAssignments: [],
+        installedSoftware: [],
+        issues: [],
+      }),
+      licenseParser,
+      fileMetadata: async () => ({ size: 10, modifiedAt: "2026-08-28T00:00:00.000Z" }),
+    });
+
+    expect(result.counts.assets).toBe(1);
+    expect(result.counts.licenses).toBe(0);
+    expect(licenseParser).not.toHaveBeenCalled();
+    expect(gateway.beginImportBatch).toHaveBeenCalledWith([
+      expect.objectContaining({
+        kind: "asset",
+        fileName: "02 203Total License(TKC) Update 2026-08-28.xlsx",
+      }),
+    ]);
+    expect(gateway.stageAssetRows).toHaveBeenCalledTimes(1);
+    expect(gateway.stageLicenseRows).not.toHaveBeenCalled();
+  });
+
   test("dry-run parses and reconciles without any RPC write", async () => {
     const gateway = fakeGateway();
     const logs: string[] = [];

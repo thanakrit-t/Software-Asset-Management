@@ -21,6 +21,7 @@ interface WorkbookPaths { assets: string; licenses: string }
 interface FileMetadata { size: number; modifiedAt: string }
 interface StageOptions {
   dryRun: boolean;
+  sourceSelection?: "all" | "assets-only";
   paths: WorkbookPaths;
   gateway: StagingGateway;
   log?: (line: string) => void;
@@ -41,36 +42,41 @@ export interface StageResult {
 
 export async function stageApprovedWorkbooks(options: StageOptions): Promise<StageResult> {
   const log = options.log ?? console.log;
+  const assetsOnly = options.sourceSelection === "assets-only";
   const injectedParsers = Boolean(options.assetParser && options.licenseParser);
   if (!injectedParsers) {
     assertApprovedPath(options.paths.assets, APPROVED_FILES.assets);
-    assertApprovedPath(options.paths.licenses, APPROVED_FILES.licenses);
+    if (!assetsOnly) assertApprovedPath(options.paths.licenses, APPROVED_FILES.licenses);
   }
   const secretFingerprinter = options.secretFingerprinter ??
     ((value: string) => createHash("sha256").update(value, "utf8").digest("hex"));
   const [assets, licenses, assetMetadata, licenseMetadata] = await Promise.all([
     (options.assetParser ?? parseAssetWorkbook)(options.paths.assets),
-    (options.licenseParser ?? parseLicenseWorkbook)(options.paths.licenses, secretFingerprinter),
+    assetsOnly
+      ? Promise.resolve(null)
+      : (options.licenseParser ?? parseLicenseWorkbook)(options.paths.licenses, secretFingerprinter),
     (options.fileMetadata ?? readMetadata)(options.paths.assets),
-    (options.fileMetadata ?? readMetadata)(options.paths.licenses),
+    assetsOnly ? Promise.resolve(null) : (options.fileMetadata ?? readMetadata)(options.paths.licenses),
   ]);
-  const issues = [...assets.issues, ...licenses.issues];
+  const issues = [...assets.issues, ...(licenses?.issues ?? [])];
   const parserErrors = issues.filter((issue) => issue.severity === "error").length;
   const parserWarnings = issues.filter((issue) => issue.severity === "warning").length;
   const counts = {
     assets: assets.assets.length,
-    licenses: licenses.stagingRows.length,
+    licenses: licenses?.stagingRows.length ?? 0,
     networkObservations: assets.networkData.length,
     peopleAssignments: assets.peopleAssignments.length,
     installedSoftware: assets.installedSoftware.filter((item) => item.present).length,
-    licenseSecrets: licenses.secrets.length,
+    licenseSecrets: licenses?.secrets.length ?? 0,
     parserErrors,
     parserWarnings,
   };
   const sources: SourceDescriptor[] = [
     descriptor("asset", assets.sourceFile, assets.sourceFingerprint, assetMetadata),
-    descriptor("license", licenses.sourceFile, licenses.sourceFingerprint, licenseMetadata),
   ];
+  if (licenses && licenseMetadata) {
+    sources.push(descriptor("license", licenses.sourceFile, licenses.sourceFingerprint, licenseMetadata));
+  }
   log(JSON.stringify({
     mode: options.dryRun ? "dry-run" : "live",
     sources: sources.map(({ kind, fileName, fingerprint, fileSizeBytes }) =>
@@ -86,11 +92,13 @@ export async function stageApprovedWorkbooks(options: StageOptions): Promise<Sta
   for (const chunk of chunks(buildAssetRows(assets), MAX_RPC_ROWS)) {
     await options.gateway.stageAssetRows(batchId, chunk);
   }
-  for (const [offset, chunk] of chunksWithOffset(licenses.stagingRows, MAX_RPC_ROWS)) {
-    const secrets = licenses.secrets.filter(
-      (secret) => secret.stagingRowIndex >= offset && secret.stagingRowIndex < offset + chunk.length,
-    );
-    await options.gateway.stageLicenseRows(batchId, chunk, secrets);
+  if (licenses) {
+    for (const [offset, chunk] of chunksWithOffset(licenses.stagingRows, MAX_RPC_ROWS)) {
+      const secrets = licenses.secrets.filter(
+        (secret) => secret.stagingRowIndex >= offset && secret.stagingRowIndex < offset + chunk.length,
+      );
+      await options.gateway.stageLicenseRows(batchId, chunk, secrets);
+    }
   }
   const validation = await options.gateway.validateImportBatch(batchId);
   log(JSON.stringify({ mode: "live-complete", batchId, validation }));
@@ -293,7 +301,12 @@ async function main(): Promise<void> {
     });
     gateway = createSupabaseStagingGateway(client);
   }
-  const staged = await stageApprovedWorkbooks({ dryRun, paths, gateway });
+  const staged = await stageApprovedWorkbooks({
+    dryRun,
+    sourceSelection: process.argv.includes("--assets-only") ? "assets-only" : "all",
+    paths,
+    gateway,
+  });
   if (!publish) return;
   if (dryRun || !client || !staged.batchId) {
     throw new Error("PUBLISH_REQUIRES_LIVE_STAGING");
