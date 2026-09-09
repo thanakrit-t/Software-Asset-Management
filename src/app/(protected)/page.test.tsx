@@ -52,7 +52,7 @@ beforeEach(() => {
 test("renders records returned by the server Supabase repository", async () => {
   render(<RoleProvider viewer={viewer}>{await Home()}</RoleProvider>);
   expect(screen.getByRole("heading", { name: /software asset management/i })).toBeInTheDocument();
-  expect(screen.getByText("LIVE-ASSET-001")).toBeInTheDocument();
   expect(screen.getByText("Live notification")).toBeInTheDocument();
+  expect(screen.getByText("Hosted fixture")).toBeInTheDocument();
 });
 
