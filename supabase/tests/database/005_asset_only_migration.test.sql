@@ -1,6 +1,6 @@
 begin;
 
-select plan(29);
+select plan(30);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -236,7 +236,8 @@ select is(
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('test.license_only_batch_id', (select id::text from migration.import_batches where batch_name = 'pgTAP License-only fixture'), true);
 select lives_ok(
-  $$ select public.stage_license_rows(current_setting('test.license_only_batch_id')::uuid, jsonb_build_array(jsonb_build_object(
+  $$ select public.stage_license_rows(current_setting('test.license_only_batch_id')::uuid, jsonb_build_array(
+    jsonb_build_object(
     'source_file_name', '03 Lisense list software thaikurabo factory office Update 2026-08-28.xlsx',
     'sheet_name', 'Software License FACTORY', 'source_row_number', 9,
     'source_row_hash', repeat('7', 64), 'raw_data', jsonb_build_object('label','license-only'),
@@ -244,7 +245,17 @@ select lives_ok(
     'normalized_product_name', 'License-only Product', 'normalized_version', '1',
     'normalized_classification', 'Commercial', 'normalized_purchase_form', 'Perpetual',
     'normalized_owned_quantity', 1, 'normalized_record_status', 'active'
-  ))) $$,
+    ),
+    jsonb_build_object(
+      'source_file_name', '03 Lisense list software thaikurabo factory office Update 2026-08-28.xlsx',
+      'sheet_name', 'Software License FACTORY', 'source_row_number', 10,
+      'source_row_hash', repeat('8', 64), 'raw_data', jsonb_build_object('label','license-only-duplicate'),
+      'normalized_publisher', 'License-only Publisher', 'normalized_vendor', 'License-only Vendor',
+      'normalized_product_name', 'License-only Product', 'normalized_version', '1',
+      'normalized_classification', 'Commercial', 'normalized_purchase_form', 'Perpetual',
+      'normalized_owned_quantity', 1, 'normalized_record_status', 'active'
+    )
+  )) $$,
   'License-only CLI-compatible payload stages after Asset-only publication'
 );
 select lives_ok(
@@ -258,6 +269,16 @@ select lives_ok(
   'License-only batch publishes after Asset-only publication'
 );
 reset role;
+select is(
+  (select pg_catalog.jsonb_object_agg(total.metric, pg_catalog.jsonb_build_object('source',total.source_total,'target',total.target_total,'status',total.status))
+   from migration.reconciliation_totals as total
+   join migration.reconciliation_runs as run on run.id=total.reconciliation_run_id
+   where run.import_batch_id=current_setting('test.license_only_batch_id')::uuid
+     and total.site_id='01000000-0000-4000-8000-000000000001'
+     and total.metric in ('licenses','owned_quantity')),
+  '{"licenses":{"source":1,"target":1,"status":"matched"},"owned_quantity":{"source":1,"target":1,"status":"matched"}}'::jsonb,
+  'License reconciliation excludes exact duplicates intentionally skipped during publication'
+);
 select throws_ok(
   $$ select public.begin_import_batch(jsonb_build_object(
     'batch_name', 'duplicate Asset-only fixture',
