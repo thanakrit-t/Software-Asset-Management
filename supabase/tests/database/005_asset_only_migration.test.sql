@@ -98,8 +98,10 @@ select lives_ok(
         'network_data', jsonb_build_array(
           jsonb_build_object('kind','mac','interface_name','lan','value','AA:BB:CC:DD:EE:01'),
           jsonb_build_object('kind','mac','interface_name','wifi','value','AA:BB:CC:DD:EE:02'),
+          jsonb_build_object('kind','mac','interface_name','vpn','value','AA:BB:CC:DD:EE:03'),
           jsonb_build_object('kind','ip','interface_name','lan','value','10.10.0.1'),
-          jsonb_build_object('kind','ip','interface_name','wifi','value','10.10.0.2')
+          jsonb_build_object('kind','ip','interface_name','wifi','value','10.10.0.2'),
+          jsonb_build_object('kind','ip','interface_name','vpn','value','10.10.0.2')
         ),
         'people_assignments', jsonb_build_array(
           jsonb_build_object('person_label','Alice Responsible','assignment_kind','responsible'),
