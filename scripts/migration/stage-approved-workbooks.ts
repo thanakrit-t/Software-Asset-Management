@@ -21,6 +21,7 @@ interface WorkbookPaths { assets: string; licenses: string }
 interface FileMetadata { size: number; modifiedAt: string }
 interface StageOptions {
   dryRun: boolean;
+  sourceSelection: "all" | "assets-only" | "licenses-only";
   paths: WorkbookPaths;
   gateway: StagingGateway;
   log?: (line: string) => void;
@@ -41,36 +42,45 @@ export interface StageResult {
 
 export async function stageApprovedWorkbooks(options: StageOptions): Promise<StageResult> {
   const log = options.log ?? console.log;
+  const assetsOnly = options.sourceSelection === "assets-only";
+  const licensesOnly = options.sourceSelection === "licenses-only";
   const injectedParsers = Boolean(options.assetParser && options.licenseParser);
   if (!injectedParsers) {
-    assertApprovedPath(options.paths.assets, APPROVED_FILES.assets);
-    assertApprovedPath(options.paths.licenses, APPROVED_FILES.licenses);
+    if (!licensesOnly) assertApprovedPath(options.paths.assets, APPROVED_FILES.assets);
+    if (!assetsOnly) assertApprovedPath(options.paths.licenses, APPROVED_FILES.licenses);
   }
   const secretFingerprinter = options.secretFingerprinter ??
     ((value: string) => createHash("sha256").update(value, "utf8").digest("hex"));
   const [assets, licenses, assetMetadata, licenseMetadata] = await Promise.all([
-    (options.assetParser ?? parseAssetWorkbook)(options.paths.assets),
-    (options.licenseParser ?? parseLicenseWorkbook)(options.paths.licenses, secretFingerprinter),
-    (options.fileMetadata ?? readMetadata)(options.paths.assets),
-    (options.fileMetadata ?? readMetadata)(options.paths.licenses),
+    licensesOnly
+      ? Promise.resolve(null)
+      : (options.assetParser ?? parseAssetWorkbook)(options.paths.assets),
+    assetsOnly
+      ? Promise.resolve(null)
+      : (options.licenseParser ?? parseLicenseWorkbook)(options.paths.licenses, secretFingerprinter),
+    licensesOnly ? Promise.resolve(null) : (options.fileMetadata ?? readMetadata)(options.paths.assets),
+    assetsOnly ? Promise.resolve(null) : (options.fileMetadata ?? readMetadata)(options.paths.licenses),
   ]);
-  const issues = [...assets.issues, ...licenses.issues];
+  const issues = [...(assets?.issues ?? []), ...(licenses?.issues ?? [])];
   const parserErrors = issues.filter((issue) => issue.severity === "error").length;
   const parserWarnings = issues.filter((issue) => issue.severity === "warning").length;
   const counts = {
-    assets: assets.assets.length,
-    licenses: licenses.stagingRows.length,
-    networkObservations: assets.networkData.length,
-    peopleAssignments: assets.peopleAssignments.length,
-    installedSoftware: assets.installedSoftware.filter((item) => item.present).length,
-    licenseSecrets: licenses.secrets.length,
+    assets: assets?.assets.length ?? 0,
+    licenses: licenses?.stagingRows.length ?? 0,
+    networkObservations: assets?.networkData.length ?? 0,
+    peopleAssignments: assets?.peopleAssignments.length ?? 0,
+    installedSoftware: assets?.installedSoftware.filter((item) => item.present).length ?? 0,
+    licenseSecrets: licenses?.secrets.length ?? 0,
     parserErrors,
     parserWarnings,
   };
-  const sources: SourceDescriptor[] = [
-    descriptor("asset", assets.sourceFile, assets.sourceFingerprint, assetMetadata),
-    descriptor("license", licenses.sourceFile, licenses.sourceFingerprint, licenseMetadata),
-  ];
+  const sources: SourceDescriptor[] = [];
+  if (assets && assetMetadata) {
+    sources.push(descriptor("asset", assets.sourceFile, assets.sourceFingerprint, assetMetadata));
+  }
+  if (licenses && licenseMetadata) {
+    sources.push(descriptor("license", licenses.sourceFile, licenses.sourceFingerprint, licenseMetadata));
+  }
   log(JSON.stringify({
     mode: options.dryRun ? "dry-run" : "live",
     sources: sources.map(({ kind, fileName, fingerprint, fileSizeBytes }) =>
@@ -83,14 +93,18 @@ export async function stageApprovedWorkbooks(options: StageOptions): Promise<Sta
   if (parserErrors > 0) throw new Error(`PARSER_ERRORS:${parserErrors}`);
 
   const batchId = await options.gateway.beginImportBatch(sources);
-  for (const chunk of chunks(buildAssetRows(assets), MAX_RPC_ROWS)) {
-    await options.gateway.stageAssetRows(batchId, chunk);
+  if (assets) {
+    for (const chunk of chunks(buildAssetRows(assets), MAX_RPC_ROWS)) {
+      await options.gateway.stageAssetRows(batchId, chunk);
+    }
   }
-  for (const [offset, chunk] of chunksWithOffset(licenses.stagingRows, MAX_RPC_ROWS)) {
-    const secrets = licenses.secrets.filter(
-      (secret) => secret.stagingRowIndex >= offset && secret.stagingRowIndex < offset + chunk.length,
-    );
-    await options.gateway.stageLicenseRows(batchId, chunk, secrets);
+  if (licenses) {
+    for (const [offset, chunk] of chunksWithOffset(licenses.stagingRows, MAX_RPC_ROWS)) {
+      const secrets = licenses.secrets.filter(
+        (secret) => secret.stagingRowIndex >= offset && secret.stagingRowIndex < offset + chunk.length,
+      );
+      await options.gateway.stageLicenseRows(batchId, chunk, secrets);
+    }
   }
   const validation = await options.gateway.validateImportBatch(batchId);
   log(JSON.stringify({ mode: "live-complete", batchId, validation }));
@@ -273,7 +287,9 @@ async function loadLocalEnvironment(): Promise<void> {
 async function main(): Promise<void> {
   await loadLocalEnvironment();
   const dryRun = process.argv.includes("--dry-run");
-  const publish = process.argv.includes("--publish");
+  if (process.argv.includes("--publish")) {
+    throw new Error("PUBLISH_REQUIRES_SEPARATE_BATCH_COMMAND");
+  }
   const paths = {
     assets: path.resolve(process.cwd(), APPROVED_FILES.assets),
     licenses: path.resolve(process.cwd(), APPROVED_FILES.licenses),
@@ -293,46 +309,84 @@ async function main(): Promise<void> {
     });
     gateway = createSupabaseStagingGateway(client);
   }
-  const staged = await stageApprovedWorkbooks({ dryRun, paths, gateway });
-  if (!publish) return;
-  if (dryRun || !client || !staged.batchId) {
-    throw new Error("PUBLISH_REQUIRES_LIVE_STAGING");
+  const publishBatchId = optionValue("--publish-batch");
+  if (publishBatchId) {
+    if (dryRun || !client) throw new Error("PUBLISH_REQUIRES_LIVE_CLIENT");
+    await publishReviewedBatch(client, publishBatchId);
+    return;
   }
-  const summaryValue = Array.isArray(staged.validation)
-    ? staged.validation[0]
-    : staged.validation;
-  const summary = (summaryValue ?? {}) as Record<string, unknown>;
+  const sourceSelection = explicitSourceSelection(process.argv);
+  const staged = await stageApprovedWorkbooks({
+    dryRun,
+    sourceSelection,
+    paths,
+    gateway,
+  });
+  if (!dryRun && client && staged.batchId) {
+    const review = await rpc<Record<string, unknown>>(client, "get_import_batch_review", {
+      import_batch_id: staged.batchId,
+    });
+    console.log(JSON.stringify({
+      mode: "hosted-review",
+      batchId: staged.batchId,
+      summary: review.summary,
+      reconciliation: review.reconciliation,
+      nextCommand: `--publish-batch=${staged.batchId} --expected-version=${String((review.batch as Record<string, unknown>)?.version)} --expected-warning-count=${String((review.summary as Record<string, unknown>)?.warning_count)}`,
+    }));
+  }
+}
+
+async function publishReviewedBatch(client: SupabaseClient, batchId: string): Promise<void> {
+  const review = await rpc<Record<string, unknown>>(client, "get_import_batch_review", {
+    import_batch_id: batchId,
+  });
+  const summary = (review.summary ?? {}) as Record<string, unknown>;
+  const batch = (review.batch ?? {}) as Record<string, unknown>;
   const errorCount = Number(summary.error_count ?? 0);
   const warningCount = Number(summary.warning_count ?? 0);
-  let version = Number(summary.version);
+  const expectedVersion = Number(optionValue("--expected-version"));
+  const expectedWarningCount = Number(optionValue("--expected-warning-count"));
+  let version = Number(batch.version);
   if (errorCount > 0 || !Number.isInteger(version)) {
     throw new Error(`IMPORT_NOT_ELIGIBLE:errors=${errorCount}`);
   }
-  const review = await rpc<Record<string, unknown>>(client, "get_import_batch_review", {
-    import_batch_id: staged.batchId,
-  });
-  console.log(JSON.stringify({
-    mode: "hosted-review",
-    batchId: staged.batchId,
-    summary: review.summary,
-    reconciliation: review.reconciliation,
-  }));
+  if (version !== expectedVersion || warningCount !== expectedWarningCount) {
+    throw new Error("REVIEW_CHANGED_RESTAGE_OR_REVIEW_REQUIRED");
+  }
   if (warningCount > 0) {
+    if (!process.argv.includes("--acknowledge-warnings")) {
+      throw new Error("WARNING_ACKNOWLEDGEMENT_REQUIRED");
+    }
     version = await rpc<number>(client, "acknowledge_import_warnings", {
-      import_batch_id: staged.batchId,
+      import_batch_id: batchId,
       expected_version: version,
     });
   }
   const published = await rpc<Record<string, unknown>>(client, "publish_import_batch", {
-    import_batch_id: staged.batchId,
+    import_batch_id: batchId,
     expected_version: version,
-    acknowledge_warnings: true,
+    acknowledge_warnings: warningCount > 0,
   });
   console.log(JSON.stringify({
     mode: "hosted-published",
-    batchId: staged.batchId,
+    batchId,
     published,
   }));
+}
+
+function explicitSourceSelection(args: string[]): StageOptions["sourceSelection"] {
+  const selected = [
+    args.includes("--assets-only") ? "assets-only" : null,
+    args.includes("--licenses-only") ? "licenses-only" : null,
+    args.includes("--all-sources") ? "all" : null,
+  ].filter((value): value is StageOptions["sourceSelection"] => value !== null);
+  if (selected.length !== 1) throw new Error("EXPLICIT_SOURCE_MODE_REQUIRED");
+  return selected[0];
+}
+
+function optionValue(name: string): string | null {
+  const prefix = `${name}=`;
+  return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length) ?? null;
 }
 function unavailableGateway(): StagingGateway {
   const fail = async () => { throw new Error("Dry-run gateway must not be called"); };

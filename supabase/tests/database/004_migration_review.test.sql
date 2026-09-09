@@ -139,7 +139,17 @@ select public.acknowledge_import_warnings(current_setting('test.batch_id')::uuid
 select lives_ok($$ select public.publish_import_batch(current_setting('test.batch_id')::uuid, ((public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'batch'->>'version')::integer), true) $$, 'eligible batch publishes atomically');
 select is((select count(*)::integer from public.assets where migration_batch_id=current_setting('test.batch_id')::uuid), 3, 'publish creates traced Assets');
 select is((select count(*)::integer from public.license_entitlements where migration_batch_id=current_setting('test.batch_id')::uuid), 2, 'publish creates traced License entitlements');
-select is((select end_date from public.license_entitlements where migration_batch_id=current_setting('test.batch_id')::uuid and migration_source_row_id=(select id from migration.license_staging_rows where source_row_number=9)), null::date, 'invalid source date range keeps original in staging and clears operational end date');
+select is((
+  select end_date
+  from public.license_entitlements
+  where migration_batch_id=current_setting('test.batch_id')::uuid
+    and migration_source_row_id=(
+      select (review_row->>'staging_row_id')::uuid
+      from jsonb_array_elements(public.get_import_batch_review(current_setting('test.batch_id')::uuid)->'rows') as review(review_row)
+      where review_row->>'entity_type'='license'
+        and (review_row->>'source_row_number')::integer=9
+    )
+), null::date, 'invalid source date range keeps original in staging and clears operational end date');
 reset role;
 select is((select count(*)::integer from audit.audit_events where entity_type='import_batch' and entity_id=current_setting('test.batch_id')::uuid and action='publish'), 1, 'publish appends one sanitized audit event');
 select is((select status::text from migration.import_batches where id=current_setting('test.batch_id')::uuid), 'committed', 'publish marks batch committed last');
