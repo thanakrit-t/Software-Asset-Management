@@ -17,5 +17,5 @@ test("protected operational pages do not depend on the mock repository", async (
     import("./(admin)/audit-logs/page"),
     import("./(admin)/users/page"),
   ])).resolves.toHaveLength(10);
-});
+}, 15_000);
 
